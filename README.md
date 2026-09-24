@@ -29,6 +29,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Alya
+        uses: alya-lang/setup-alya@v1
+
       - name: Bump Alya dependencies
         uses: alya-lang/update-alya@v1
 ```
@@ -59,9 +62,11 @@ jobs:
 
 ## 📌 Scope
 
-- ✅ `{ git = "<url>", tag = "vX.Y.Z" }` pins are bumped to the upstream latest release tag.
+- ✅ With `alya` on PATH (e.g. via `alya-lang/setup-alya` first): delegates to `alya update -u`, which upgrades `alya.toml` pins **and** re-locks `alya.lock` with correct checksums.
+- ✅ Without a compiler: bumps `{ git = "<url>", tag = "vX.Y.Z" }` pins in `alya.toml` directly via the GitHub API — except when a committed `alya.lock` exists, where manifest-only bumps would leave a stale lock (checksum mismatch on install), so the run stops with guidance instead.
 - ⏭️ `rev`/`branch` pins and non-semver tags are reported but never rewritten.
 - ⏭️ The package `version` and `alya-version` fields are never touched.
+- 🔀 Changes never go straight to the base branch: a timestamped `alya-deps/…` branch plus pull request (or working tree only with `create-pr: 'false'`).
 
 Requires `contents: write` and `pull-requests: write` permissions when `create-pr` is enabled.
 
