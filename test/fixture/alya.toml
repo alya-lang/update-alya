@@ -1,0 +1,14 @@
+[package]
+name = "fixture"
+version = "0.1.0"
+alya-version = "0.0.19"
+entry = "src/lib.alya"
+description = "Dry-run fixture for update-alya CI (intentionally outdated pin)"
+authors = ["Alya Language Contributors <https://github.com/alya-lang>"]
+license = "MIT"
+homepage = "https://github.com/alya-lang/alya"
+repository = "https://github.com/alya-lang/update-alya"
+keywords = ["alya", "alya-lang", "package", "fixture"]
+
+[dependencies]
+rand = { git = "https://github.com/alya-lang/rand", tag = "v0.0.0" }

@@ -1,0 +1,32 @@
+name: Test update-alya
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Dry-run fixture
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run updater in dry-run mode
+        id: update
+        uses: ./
+        with:
+          package-dir: 'test/fixture'
+          dry-run: 'true'
+
+      - name: Verify outdated pin is detected
+        run: |
+          test "${{ steps.update.outputs.updated }}" = "true"
+          echo "${{ steps.update.outputs.summary }}"
+
+      - name: Verify fixture file untouched
+        run: |
+          grep -q 'tag = "v0.0.0"' test/fixture/alya.toml

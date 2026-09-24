@@ -1,0 +1,56 @@
+name: 'Update Alya'
+description: 'Bump outdated Alya package dependencies (alya.toml git tags) and open a pull request, Dependabot-style'
+author: 'Alya Language Contributors'
+
+branding:
+  icon: 'arrow-up-circle'
+  color: 'green'
+
+inputs:
+  package-dir:
+    description: 'Path to the Alya package directory containing alya.toml'
+    required: false
+    default: '.'
+  create-pr:
+    description: 'Open a pull request with the bumps (false only updates the working tree)'
+    required: false
+    default: 'true'
+  dry-run:
+    description: 'Report outdated pins without changing any files'
+    required: false
+    default: 'false'
+  base:
+    description: 'Base branch for the pull request'
+    required: false
+    default: 'main'
+  branch-prefix:
+    description: 'Prefix for the generated update branch'
+    required: false
+    default: 'alya-deps'
+  token:
+    description: 'GitHub token used for API requests and pull request creation'
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  updated:
+    description: 'Whether any dependency pin was bumped (true/false)'
+    value: ${{ steps.update.outputs.updated }}
+  summary:
+    description: 'Human-readable summary of checked and bumped dependencies'
+    value: ${{ steps.update.outputs.summary }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Update Alya dependencies
+      id: update
+      shell: bash
+      run: python3 "${{ github.action_path }}/update_alya.py"
+      env:
+        INPUT_PACKAGE_DIR: ${{ inputs.package-dir }}
+        INPUT_CREATE_PR: ${{ inputs.create-pr }}
+        INPUT_DRY_RUN: ${{ inputs.dry-run }}
+        INPUT_BASE: ${{ inputs.base }}
+        INPUT_BRANCH_PREFIX: ${{ inputs.branch-prefix }}
+        INPUT_TOKEN: ${{ inputs.token }}
