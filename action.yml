@@ -27,6 +27,14 @@ inputs:
     description: 'Prefix for the generated update branch'
     required: false
     default: 'alya-deps'
+  labels:
+    description: 'Comma-separated labels to attach to the pull request (created if missing)'
+    required: false
+    default: 'dependencies'
+  reviewers:
+    description: 'Comma-separated GitHub usernames to request review from (optional)'
+    required: false
+    default: ''
   token:
     description: 'GitHub token used for API requests and pull request creation'
     required: false
@@ -53,4 +61,6 @@ runs:
         INPUT_DRY_RUN: ${{ inputs.dry-run }}
         INPUT_BASE: ${{ inputs.base }}
         INPUT_BRANCH_PREFIX: ${{ inputs.branch-prefix }}
+        INPUT_LABELS: ${{ inputs.labels }}
+        INPUT_REVIEWERS: ${{ inputs.reviewers }}
         INPUT_TOKEN: ${{ inputs.token }}

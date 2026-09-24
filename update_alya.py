@@ -93,6 +93,42 @@ def read_pins(manifest):
     return pins
 
 
+def release_notes(owner, repo, tag, token="", limit=3000):
+    """Fetches an upstream release body for PR descriptions (Dependabot-style)."""
+    try:
+        data = api_get(f"https://api.github.com/repos/{owner}/{repo}/releases/tags/{tag}", token)
+        body = (data.get("body") or "").strip()
+    except Exception:
+        return ""
+    if len(body) > limit:
+        body = body[:limit].rstrip() + "\n\n…(truncated)"
+    return body
+
+
+def ensure_labels(pkg_dir, labels, env):
+    """Creates missing PR labels (needs push access, already required)."""
+    existing = set()
+    try:
+        res = run(["gh", "label", "list", "--json", "name", "--jq", ".[].name"], cwd=str(pkg_dir), env=env)
+        if res.returncode == 0:
+            existing = {l.strip() for l in (res.stdout or "").splitlines() if l.strip()}
+    except Exception:
+        pass
+    for label in labels:
+        if label not in existing:
+            try:
+                run(
+                    ["gh", "label", "create", label, "--description", "Alya dependency updates",
+                     "--color", "0366d6"],
+                    cwd=str(pkg_dir),
+                    env=env,
+                    check=True,
+                )
+                log(f"Created label: {label}")
+            except Exception as e:
+                log(f"Warning: could not create label {label!r} ({e}); continuing.")
+
+
 def run(cmd, cwd=None, env=None, check=False):
     merged = dict(os.environ)
     if env:
@@ -120,7 +156,7 @@ def compiler_bump(pkg_dir, token, dry_run):
                 continue
             cur_v, new_v = parse_version(current), parse_version(latest)
             if cur_v is not None and new_v is not None and new_v > cur_v:
-                bumps.append({"name": name, "current": current, "latest": latest})
+                bumps.append({"name": name, "owner": owner, "repo": repo, "current": current, "latest": latest})
         return bumps, skipped, ""
     res = run(["alya", "update", "-u"], cwd=str(pkg_dir))
     output = (res.stdout or "") + (res.stderr or "")
@@ -131,7 +167,7 @@ def compiler_bump(pkg_dir, token, dry_run):
     for name, (owner, repo, old_tag) in before.items():
         new_tag = after.get(name, (None, None, old_tag))[2]
         if new_tag != old_tag:
-            bumps.append({"name": name, "current": old_tag, "latest": new_tag})
+            bumps.append({"name": name, "owner": owner, "repo": repo, "current": old_tag, "latest": new_tag})
     return bumps, skipped, output
 
 
@@ -158,7 +194,7 @@ def fallback_bump(pkg_dir, token, manifest):
                 skipped.append(f"{name}: non-semver pin {current!r} (latest {latest!r}), left untouched")
             continue
         if new_v > cur_v:
-            bumps.append({"name": name, "current": current, "latest": latest})
+            bumps.append({"name": name, "owner": owner, "repo": repo, "current": current, "latest": latest})
             lines[i] = line.replace(f'tag = "{current}"', f'tag = "{latest}"', 1)
     new_text = "".join(lines) if bumps else None
     return bumps, skipped, new_text
@@ -227,8 +263,16 @@ def main():
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     branch = f"{prefix}/{stamp}"
+    labels = [l.strip() for l in os.environ.get("INPUT_LABELS", "dependencies").split(",") if l.strip()]
+    reviewers = [r.strip() for r in os.environ.get("INPUT_REVIEWERS", "").split(",") if r.strip()]
     gh_env = {"GH_TOKEN": token, "GITHUB_TOKEN": token} if token else None
     try:
+        ensure_labels(pkg_dir, labels, gh_env)
+        notes_sections = []
+        for b in bumps:
+            notes = release_notes(b["owner"], b["repo"], b["latest"], token)
+            if notes:
+                notes_sections.append(f"#### {b['name']} {b['latest']}\n\n{notes}")
         run(["git", "checkout", "-B", branch], cwd=str(pkg_dir), check=True)
         run(["git", "config", "user.name", "github-actions[bot]"], cwd=str(pkg_dir), check=True)
         run(
@@ -242,13 +286,15 @@ def main():
         run(["git", "commit", "-m", "chore(deps): bump alya dependencies"], cwd=str(pkg_dir), check=True)
         run(["git", "push", "-u", "origin", branch], cwd=str(pkg_dir), check=True)
         pr_body = "Automated Alya dependency bumps by [update-alya](https://github.com/alya-lang/update-alya).\n\n" + "\n".join(body_lines)
-        pr = run(
-            ["gh", "pr", "create", "--base", base, "--head", branch,
-             "--title", "chore(deps): bump alya dependencies", "--body", pr_body],
-            cwd=str(pkg_dir),
-            env=gh_env,
-            check=True,
-        )
+        if notes_sections:
+            pr_body += "\n\n### Release notes\n\n" + "\n\n".join(notes_sections)
+        pr_cmd = ["gh", "pr", "create", "--base", base, "--head", branch,
+                  "--title", "chore(deps): bump alya dependencies", "--body", pr_body]
+        for label in labels:
+            pr_cmd += ["--label", label]
+        for reviewer in reviewers:
+            pr_cmd += ["--reviewer", reviewer]
+        pr = run(pr_cmd, cwd=str(pkg_dir), env=gh_env, check=True)
         log(f"Opened pull request: {pr.stdout.strip()[:200]}")
     except Exception as e:
         log_error(f"Could not open pull request: {e}")

@@ -47,6 +47,8 @@ jobs:
 | `dry-run` | Report outdated pins without changing any files | No | `'false'` |
 | `base` | Base branch for the pull request | No | `'main'` |
 | `branch-prefix` | Prefix for the generated update branch | No | `'alya-deps'` |
+| `labels` | Comma-separated labels attached to the PR (created if missing) | No | `'dependencies'` |
+| `reviewers` | Comma-separated GitHub usernames to request review from | No | `''` |
 | `token` | GitHub token for API requests and pull request creation | No | `${{ github.token }}` |
 
 ---
@@ -68,7 +70,7 @@ jobs:
 - ⏭️ The package `version` and `alya-version` fields are never touched.
 - 🔀 Changes never go straight to the base branch: a timestamped `alya-deps/…` branch plus pull request (or working tree only with `create-pr: 'false'`).
 
-Requires `contents: write` and `pull-requests: write` permissions when `create-pr` is enabled.
+Requires `contents: write` and `pull-requests: write` permissions when `create-pr` is enabled. Opened PRs carry the configured labels, requested reviewers, and the upstream release notes of each bumped dependency.
 
 ---
 
