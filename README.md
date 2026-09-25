@@ -3,13 +3,13 @@
 [![CI](https://github.com/alya-lang/update-alya/actions/workflows/test.yml/badge.svg)](https://github.com/alya-lang/update-alya/actions/workflows/test.yml)
 [![License](https://img.shields.io/github/license/alya-lang/update-alya?color=blue&label=License)](LICENSE)
 
-Dependabot-style updater for [Alya](https://github.com/alya-lang/alya) package dependencies. Scans every `alya.toml` under `package-dir`, groups outdated `git` pins by upstream package (one PR per dependency, e.g. `chore(deps): bump rand from v0.0.0 to v0.1.0`), refreshes locks, and opens pull requests. Version bumps and lock refreshes get separate PRs (Renovate-style), so mechanical lock updates can merge under a different policy.
+Dependabot-style updater for [Alya](https://github.com/alya-lang/alya) package dependencies. Scans `alya.toml` files, checks for outdated git tags and branch revisions, updates locks, and opens automated pull requests.
 
 ---
 
 ## ⚡ Quick Start
 
-Add `alya-lang/update-alya@v1` to a scheduled workflow in your package repository:
+Create `.github/workflows/update-deps.yml` in your repository:
 
 ```yaml
 name: Update Alya dependencies
@@ -38,41 +38,37 @@ jobs:
 
 ---
 
-## 📌 Examples
+## 🧹 Automatic Branch Cleanup (Recommended)
 
-### PAT-based run (locked workflow policy)
+When pull requests are merged or closed without merging, GitHub does not delete unmerged branches by default. Add `.github/workflows/cleanup-deps.yml` to automatically delete dependency branches whenever PRs are closed:
 
 ```yaml
+name: Cleanup Dependency Branches
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+
 jobs:
-  update:
+  cleanup:
+    name: Delete PR branch
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    if: |
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.head_ref, 'alya-deps/')
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Alya
-        uses: alya-lang/setup-alya@v1
-
-      - name: Bump Alya dependencies
-        uses: alya-lang/update-alya@v1
-        with:
-          token: ${{ secrets.UPDATE_ALYA_TOKEN }}
+      - name: Delete merged or closed branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          gh api --method DELETE "repos/${{ github.repository }}/git/refs/heads/${BRANCH}" || true
 ```
 
-### Dry-run report without side effects
-
-```yaml
-      - name: Check for outdated pins
-        id: check
-        uses: alya-lang/update-alya@v1
-        with:
-          dry-run: 'true'
-
-      - name: Notify on Slack
-        if: steps.check.outputs.updated == 'true'
-        run: echo "${{ steps.check.outputs.summary }}"
-```
+> **Tip:** You can also enable **"Automatically delete head branches"** in repository *Settings → General → Pull Requests* to let GitHub natively prune merged branches.
 
 ---
 
@@ -80,12 +76,12 @@ jobs:
 
 | Input | Description | Required | Default |
 |:---|:---|:---:|:---:|
-| `package-dir` | Scan root: every `alya.toml` below it is checked (one PR per upstream dependency) | No | `'.'` |
+| `package-dir` | Scan root: every `alya.toml` below it is checked | No | `'.'` |
 | `create-pr` | Open a pull request with the bumps (`false` only updates the working tree) | No | `'true'` |
 | `dry-run` | Report outdated pins without changing any files | No | `'false'` |
 | `base` | Base branch for the pull request | No | `'main'` |
 | `branch-prefix` | Prefix for the generated update branch | No | `'alya-deps'` |
-| `branch-suffix` | Slug in the stable branch name (`<prefix>/<suffix>`, defaults to package dir); separates parallel matrix jobs | No | `''` |
+| `branch-suffix` | Scope segment in branch names (`<prefix>/<suffix>/<dep>-<ver>`); separates parallel matrix jobs | No | `''` |
 | `labels` | Comma-separated labels attached to the PR (created if missing) | No | `'dependencies'` |
 | `reviewers` | Comma-separated GitHub usernames to request review from | No | `''` |
 | `token` | GitHub token for API requests and pull request creation | No | `${{ github.token }}` |
@@ -101,53 +97,27 @@ jobs:
 
 ---
 
-## 📌 Scope
+## ✨ Features & Behavior
 
-- ✅ With `alya` on PATH (e.g. via `alya-lang/setup-alya` first): delegates to `alya update -u`, which upgrades `alya.toml` pins **and** re-locks `alya.lock` with correct checksums.
-- ✅ Without a compiler: bumps `{ git = "<url>", tag = "vX.Y.Z" }` pins in `alya.toml` directly via the GitHub API — except when a committed `alya.lock` exists, where manifest-only bumps would leave a stale lock (checksum mismatch on install), so the run stops with guidance instead.
-- ⏭️ `rev` pins and non-semver tags are reported but never rewritten.
-- 🔀 Branch pins: manifest keeps `branch = "…"`, the lock rev is refreshed via the compiler path; PRs list the commits between revs (no release changelog exists for branches). Without a compiler, lock drift is reported read-only.
-- 🚫 Empty-PR guard: a pull request opens only when `alya.toml`/`alya.lock` actually changed.
-- ⏭️ The package `version` and `alya-version` fields are never touched.
-- 🔀 Changes never go straight to the base branch: one stable branch per package (`<prefix>/<suffix>` or `<prefix>/<dep>-<ver>`) plus pull request (or working tree only with `create-pr: 'false'`). Repeat runs refresh the same PR instead of piling up duplicates.
+- **Compiler Integration:** When `alya` is installed (via `alya-lang/setup-alya`), runs `alya update -u` to update `alya.toml` and synchronize `alya.lock` with correct checksums.
+- **Manifest Fallback:** Without a compiler, updates `{ git, tag }` pins directly via the GitHub API (requires no committed lockfile).
+- **One PR Per Dependency:** Groups bumps by upstream dependency (e.g. `chore(deps): bump rand from v0.0.0 to v0.1.0`).
+- **No Duplicate PRs:** Re-running the action updates the existing branch and PR instead of creating duplicates.
+- **Empty-PR Guard:** Never opens a PR if `alya.toml` and `alya.lock` haven't changed.
+- **Detailed Changelogs:** Pull request descriptions include commit lists and release notes comparing old and new revisions.
 
-### 🧹 Instant Branch Cleanup on PR Merge / Close
+---
 
-By default, GitHub does not trigger the updater when you click *Merge pull request* or *Close pull request* in the web UI. To have branches deleted **immediately** whenever a dependency PR is merged or closed, add this lightweight workflow to your repository (`.github/workflows/cleanup-deps.yml`):
+## 🔑 Authentication
 
-```yaml
-name: Cleanup Dependency Branches
-
-on:
-  pull_request:
-    types: [closed]
-
-permissions:
-  contents: write
-
-jobs:
-  cleanup:
-    runs-on: ubuntu-latest
-    if: |
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      startsWith(github.head_ref, 'alya-deps/')
-    steps:
-      - name: Delete branch
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BRANCH: ${{ github.head_ref }}
-        run: |
-          gh api --method DELETE "repos/${{ github.repository }}/git/refs/heads/${BRANCH}" || true
-```
-
-Additionally, enable **Automatically delete head branches** in repository *Settings → General → Pull Requests* to let GitHub natively prune merged branches.
-
-Requires `contents: write` and `pull-requests: write` permissions when `create-pr` is enabled. Opened PRs carry the configured labels, requested reviewers, and per-dependency `🚀 What's Changed` commit lists (`* subject by user (sha)` — plain names, no `@`-mentions, so upstream authors are not pinged; tag bumps fall back to the upstream release body only when the old ref cannot be compared).
-
-## 🔑 Authentication (two supported paths)
-
-1. **Default token (simplest):** allow GitHub Actions to create pull requests — repository *Settings → Actions → General → Workflow permissions*, or once per organization. Nothing extra to configure; omit `token`.
-2. **PAT:** if your organization locks that policy, create a token with `contents` + `pull-requests` access, store it as a secret (e.g. `UPDATE_ALYA_TOKEN`), and pass `token: ${{ secrets.UPDATE_ALYA_TOKEN }}`. It is used for push, labels, and PR creation alike.
+1. **Default `GITHUB_TOKEN` (Recommended):**
+   Ensure GitHub Actions has permission to create pull requests in repository **Settings → Actions → General → Workflow permissions** (enable *"Allow GitHub Actions to create and approve pull requests"*).
+2. **Personal Access Token (PAT):**
+   If workflow permissions are locked, create a PAT with `contents: write` and `pull-requests: write`, save it as a repository secret (e.g., `UPDATE_ALYA_TOKEN`), and pass:
+   ```yaml
+   with:
+     token: ${{ secrets.UPDATE_ALYA_TOKEN }}
+   ```
 
 ---
 
