@@ -47,6 +47,7 @@ jobs:
 | `dry-run` | Report outdated pins without changing any files | No | `'false'` |
 | `base` | Base branch for the pull request | No | `'main'` |
 | `branch-prefix` | Prefix for the generated update branch | No | `'alya-deps'` |
+| `branch-suffix` | Optional suffix in the branch name (separates parallel matrix jobs) | No | `''` |
 | `labels` | Comma-separated labels attached to the PR (created if missing) | No | `'dependencies'` |
 | `reviewers` | Comma-separated GitHub usernames to request review from | No | `''` |
 | `token` | GitHub token for API requests and pull request creation | No | `${{ github.token }}` |

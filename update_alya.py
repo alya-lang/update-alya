@@ -424,7 +424,8 @@ def main():
         return
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    branch = f"{prefix}/{stamp}"
+    suffix = os.environ.get("INPUT_BRANCH_SUFFIX", "").strip().strip("/")
+    branch = f"{prefix}/{suffix}-{stamp}" if suffix else f"{prefix}/{stamp}"
     labels = [l.strip() for l in os.environ.get("INPUT_LABELS", "dependencies").split(",") if l.strip()]
     reviewers = [r.strip() for r in os.environ.get("INPUT_REVIEWERS", "").split(",") if r.strip()]
     gh_env = {"GH_TOKEN": token, "GITHUB_TOKEN": token} if token else None

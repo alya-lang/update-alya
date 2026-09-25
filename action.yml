@@ -27,6 +27,10 @@ inputs:
     description: 'Prefix for the generated update branch'
     required: false
     default: 'alya-deps'
+  branch-suffix:
+    description: 'Optional suffix inserted into the branch name (useful to separate parallel matrix jobs)'
+    required: false
+    default: ''
   labels:
     description: 'Comma-separated labels to attach to the pull request (created if missing)'
     required: false
@@ -61,6 +65,7 @@ runs:
         INPUT_DRY_RUN: ${{ inputs.dry-run }}
         INPUT_BASE: ${{ inputs.base }}
         INPUT_BRANCH_PREFIX: ${{ inputs.branch-prefix }}
+        INPUT_BRANCH_SUFFIX: ${{ inputs.branch-suffix }}
         INPUT_LABELS: ${{ inputs.labels }}
         INPUT_REVIEWERS: ${{ inputs.reviewers }}
         INPUT_TOKEN: ${{ inputs.token }}
