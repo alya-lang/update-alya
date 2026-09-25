@@ -454,16 +454,29 @@ def entry_line(repo, e):
     return f"- {rel}: {e['name']}: {e['current']} -> {e['latest']}"
 
 
+def repo_slug(repo):
+    """Returns 'owner/name' from the origin remote, or ''."""
+    try:
+        r = run(["git", "remote", "get-url", "origin"], cwd=str(repo))
+        m = re.match(r"https://github\.com/([^/]+)/([^/]+?)(?:\.git)?$", (r.stdout or "").strip())
+        if m:
+            return f"{m.group(1)}/{m.group(2)}"
+    except Exception:
+        pass
+    return ""
+
+
 def close_scope_stales(repo, prefix, scope, active_deps, gh_env):
     """Closes open updater PRs in scope whose dependency is now clean."""
+    closed = []
     head_prefix = f"{prefix}/{scope}/" if scope else f"{prefix}/"
     try:
         r = run(["gh", "pr", "list", "--state", "open", "--json", "number,headRefName",
                  "--jq", ".[].number, .[].headRefName"], cwd=str(repo), env=gh_env)
     except Exception:
-        return
+        return closed
     if r.returncode != 0:
-        return
+        return closed
     tokens = (r.stdout or "").split()
     numbers, heads = tokens[0::2], tokens[1::2]
     for num, head in zip(numbers, heads):
@@ -476,8 +489,10 @@ def close_scope_stales(repo, prefix, scope, active_deps, gh_env):
                      "Alya dependencies are up to date; closing."],
                     cwd=str(repo), env=gh_env, check=True)
                 log(f"Closed stale pull request #{num} ({head}).")
+                closed.append(num)
             except Exception as e:
                 log(f"Warning: could not close PR #{num} ({e}).")
+    return closed
 
 
 def main():
@@ -523,26 +538,31 @@ def main():
     for b in bumps:
         log(f"{b['name']}: {short_rev(b['current'])} -> {short_rev(b['latest'])}")
 
-    summary_lines = [f"{len(bumps)} bump(s), {len(skipped)} skipped."]
+    table = ["| Dependency | Manifest | Change |", "|:---|:---|:---|"]
     for b in bumps:
+        try:
+            rel = os.path.relpath(b["dir"], str(repo))
+        except Exception:
+            rel = b.get("dir", ".")
         if b.get("kind") == "branch":
-            summary_lines.append(f"- {b['name']} (lock): {short_rev(b['current'])} -> {short_rev(b['latest'])}")
+            change = f"(lock) {short_rev(b['current'])} → {short_rev(b['latest'])}"
         elif b.get("kind") == "lock-new":
-            summary_lines.append(f"- {b['name']} (new lock): {short_rev(b['latest'])}")
+            change = f"(new lock) {short_rev(b['latest'])}"
         else:
-            summary_lines.append(f"- {b['name']}: {b['current']} -> {b['latest']}")
-    for s in skipped:
-        summary_lines.append(f"- skip: {s}")
-    summary = "\n".join(summary_lines)
+            change = f"{b['current']} → {b['latest']}"
+        table.append(f"| `{b['name']}` | `{rel}` | {change} |")
+    summary = "\n".join(
+        [f"{len(bumps)} bump(s) across {len(manifests)} manifest(s), {len(skipped)} skipped.",
+         ""] + table
+    )
+    if skipped:
+        summary += "\n\n<details><summary>Skipped</summary>\n\n" + "\n".join(f"- {s}" for s in skipped) + "\n</details>"
 
     if dry_run:
         log("Dry run: no files changed.")
         write_outputs(updated=bool(bumps), summary=summary)
         write_summary(scan_root.name, summary)
         return
-
-    write_outputs(updated=bool(bumps), summary=summary)
-    write_summary(scan_root.name, summary)
 
     if not create_pr:
         log("create-pr=false: changes left in the working tree." if bumps else "Everything up to date.")
@@ -568,14 +588,29 @@ def main():
                     cwd=str(repo),
                     check=True,
                 )
+        pr_events = []
         for (dep, cls), entries in groups.items():
-            bump_dep(repo, dep, cls, entries, base, prefix, scope, labels, reviewers, gh_env, token)
-        close_scope_stales(repo, prefix, scope, {dep for dep, _ in groups}, gh_env)
+            ev = bump_dep(repo, dep, cls, entries, base, prefix, scope, labels, reviewers, gh_env, token)
+            if ev[0]:
+                pr_events.append((dep,) + ev)
+        for num in close_scope_stales(repo, prefix, scope, {dep for dep, _ in groups}, gh_env):
+            pr_events.append(("", "closed", num))
+        slug = repo_slug(repo)
+        if pr_events:
+            summary += "\n\n### Pull requests\n"
+            for dep, ev, num in pr_events:
+                link = f"https://github.com/{slug}/pull/{num}" if slug else ""
+                ref = f"[#{num}]({link})" if link else f"#{num}"
+                what = f" ({dep})" if dep else ""
+                summary += f"\n- {ref} {ev}{what}"
         if not groups:
             log("Everything up to date.")
     except Exception as e:
         log_error(f"Could not process pull requests: {e}")
         sys.exit(1)
+
+    write_outputs(updated=bool(bumps), summary=summary)
+    write_summary(scan_root.name, summary)
 
 def bump_dep(repo, dep, cls, entries, base, prefix, scope, labels, reviewers, gh_env, token):
     """Stages, commits, pushes and opens/refreshes one dependency PR."""
@@ -653,7 +688,7 @@ def bump_dep(repo, dep, cls, entries, base, prefix, scope, labels, reviewers, gh
     staged = run(["git", "status", "--porcelain", "--"] + sorted(files), cwd=str(repo))
     if not (staged.stdout or "").strip():
         log(f"[{dep}] No changes detected; skipping pull request (avoids empty PR).")
-        return
+        return None, None
     title = dep_title(dep, entries)
     run(["git", "commit", "-m", title], cwd=str(repo), check=True)
     run(["git", "push", "-f", "-u", "origin", branch], cwd=str(repo), check=True)
@@ -668,6 +703,7 @@ def bump_dep(repo, dep, cls, entries, base, prefix, scope, labels, reviewers, gh
             edit_cmd += ["--add-reviewer", reviewer]
         run(edit_cmd, cwd=str(repo), env=gh_env, check=True)
         log(f"[{dep}] Updated pull request #{existing_pr}.")
+        return "updated", existing_pr
     else:
         pr_cmd = ["gh", "pr", "create", "--base", base, "--head", branch,
                   "--title", title, "--body", pr_body]
@@ -677,6 +713,8 @@ def bump_dep(repo, dep, cls, entries, base, prefix, scope, labels, reviewers, gh
             pr_cmd += ["--reviewer", reviewer]
         pr = run(pr_cmd, cwd=str(repo), env=gh_env, check=True)
         log(f"[{dep}] Opened pull request: {pr.stdout.strip()[:200]}")
+        m = re.search(r"/pull/(\d+)", pr.stdout or "")
+        return "opened", int(m.group(1)) if m else None
 
 
 
@@ -706,7 +744,7 @@ def write_summary(pkg_name, summary):
     gh_summary = os.environ.get("GITHUB_STEP_SUMMARY", "")
     if not gh_summary:
         return
-    body = f"## Update Alya ({pkg_name})\n\n```text\n{summary}\n```\n"[:SUMMARY_LIMIT]
+    body = f"## Update Alya ({pkg_name})\n\n{summary}\n"[:SUMMARY_LIMIT]
     with open(gh_summary, "a", encoding="utf-8") as f:
         f.write(body)
 
