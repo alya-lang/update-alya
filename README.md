@@ -38,6 +38,44 @@ jobs:
 
 ---
 
+## 📌 Examples
+
+### PAT-based run (locked workflow policy)
+
+```yaml
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Alya
+        uses: alya-lang/setup-alya@v1
+
+      - name: Bump Alya dependencies
+        uses: alya-lang/update-alya@v1
+        with:
+          token: ${{ secrets.UPDATE_ALYA_TOKEN }}
+```
+
+### Dry-run report without side effects
+
+```yaml
+      - name: Check for outdated pins
+        id: check
+        uses: alya-lang/update-alya@v1
+        with:
+          dry-run: 'true'
+
+      - name: Notify on Slack
+        if: steps.check.outputs.updated == 'true'
+        run: echo "${{ steps.check.outputs.summary }}"
+```
+
+---
+
 ## ⚙️ Inputs
 
 | Input | Description | Required | Default |
