@@ -66,7 +66,9 @@ jobs:
 
 - ✅ With `alya` on PATH (e.g. via `alya-lang/setup-alya` first): delegates to `alya update -u`, which upgrades `alya.toml` pins **and** re-locks `alya.lock` with correct checksums.
 - ✅ Without a compiler: bumps `{ git = "<url>", tag = "vX.Y.Z" }` pins in `alya.toml` directly via the GitHub API — except when a committed `alya.lock` exists, where manifest-only bumps would leave a stale lock (checksum mismatch on install), so the run stops with guidance instead.
-- ⏭️ `rev`/`branch` pins and non-semver tags are reported but never rewritten.
+- ⏭️ `rev` pins and non-semver tags are reported but never rewritten.
+- 🔀 Branch pins: manifest keeps `branch = "…"`, the lock rev is refreshed via the compiler path; PRs list the commits between revs (no release changelog exists for branches). Without a compiler, lock drift is reported read-only.
+- 🚫 Empty-PR guard: a pull request opens only when `alya.toml`/`alya.lock` actually changed.
 - ⏭️ The package `version` and `alya-version` fields are never touched.
 - 🔀 Changes never go straight to the base branch: a timestamped `alya-deps/…` branch plus pull request (or working tree only with `create-pr: 'false'`).
 
