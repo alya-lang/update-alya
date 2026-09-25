@@ -28,7 +28,7 @@ inputs:
     required: false
     default: 'alya-deps'
   branch-suffix:
-    description: 'Optional suffix inserted into the branch name (useful to separate parallel matrix jobs)'
+    description: 'Scope segment in branch names (<prefix>[/<suffix>]/<dep>-<ver>); separates consumers sharing one repo'
     required: false
     default: ''
   labels:

@@ -3,7 +3,7 @@
 [![CI](https://github.com/alya-lang/update-alya/actions/workflows/test.yml/badge.svg)](https://github.com/alya-lang/update-alya/actions/workflows/test.yml)
 [![License](https://img.shields.io/github/license/alya-lang/update-alya?color=blue&label=License)](LICENSE)
 
-Dependabot-style updater for [Alya](https://github.com/alya-lang/alya) package dependencies. Scans `alya.toml` `[dependencies]` for `git`+`tag` pins, bumps outdated tags to their latest releases, and opens a pull request.
+Dependabot-style updater for [Alya](https://github.com/alya-lang/alya) package dependencies. Scans every `alya.toml` under `package-dir`, groups outdated `git` pins by upstream package (one PR per dependency, e.g. `chore(deps): bump rand from v0.0.0 to v0.1.0`), refreshes locks, and opens pull requests.
 
 ---
 
@@ -80,7 +80,7 @@ jobs:
 
 | Input | Description | Required | Default |
 |:---|:---|:---:|:---:|
-| `package-dir` | Path to the Alya package directory containing `alya.toml` | No | `'.'` |
+| `package-dir` | Scan root: every `alya.toml` below it is checked (one PR per upstream dependency) | No | `'.'` |
 | `create-pr` | Open a pull request with the bumps (`false` only updates the working tree) | No | `'true'` |
 | `dry-run` | Report outdated pins without changing any files | No | `'false'` |
 | `base` | Base branch for the pull request | No | `'main'` |

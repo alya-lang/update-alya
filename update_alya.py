@@ -357,39 +357,132 @@ def fallback_bump(pkg_dir, token, manifest):
     new_text = "".join(lines) if bumps else None
     return bumps, skipped, new_text
 
+def git_toplevel(start):
+    """Returns the enclosing git repo root, or `start` when not in a repo."""
+    try:
+        r = run(["git", "rev-parse", "--show-toplevel"], cwd=str(start))
+        if r.returncode == 0 and (r.stdout or "").strip():
+            return Path((r.stdout or "").strip())
+    except Exception:
+        pass
+    return start
+
+
+def collect_manifests(root):
+    """Finds dirs containing alya.toml under `root` (skips caches/VCS)."""
+    found = []
+    for dp, dn, fn in os.walk(root):
+        dn[:] = [d for d in dn if d not in (".git", ".alya", "target", "node_modules", "__pycache__", ".venv", "vendor")]
+        if "alya.toml" in fn:
+            found.append(Path(dp))
+    return sorted(found)
+
+
+def dep_branch(prefix, scope, dep, ver):
+    """Stable branch per dependency: <prefix>[/<scope>]/<dep>-<ver>."""
+    slug = f"{dep}-{ver}".replace("/", "-")
+    return f"{prefix}/{scope}/{slug}" if scope else f"{prefix}/{slug}"
+
+
+def dep_title(dep, entries):
+    """Dependabot-style PR title for one dependency group."""
+    tags = [e for e in entries if e.get("kind") == "tag"]
+    if tags:
+        olds = sorted({e["current"] for e in tags})
+        new = tags[0]["latest"]
+        for e in tags[1:]:
+            try:
+                if (parse_version(e["latest"]) or (0,)) > (parse_version(new) or (0,)):
+                    new = e["latest"]
+            except Exception:
+                pass
+        old_display = olds[0] if len(olds) == 1 else "/".join(olds)
+        return f"chore(deps): bump {dep} from {old_display} to {new}"
+    for e in entries:
+        if e.get("kind") == "branch":
+            return f"chore(deps): bump {dep} lock {short_rev(e['current'])} -> {short_rev(e['latest'])}"
+    e = entries[0]
+    return f"chore(deps): lock {dep} {short_rev(e['latest'])}"
+
+
+def entry_line(repo, e):
+    """One human-readable line for a bump entry, prefixed with its manifest."""
+    try:
+        rel = os.path.relpath(e["dir"], str(repo))
+    except Exception:
+        rel = e.get("dir", ".")
+    if e.get("kind") == "branch":
+        return f"- {rel}: {e['name']} (lock): {short_rev(e['current'])} -> {short_rev(e['latest'])}"
+    if e.get("kind") == "lock-new":
+        return f"- {rel}: {e['name']} (new lock): {short_rev(e['latest'])}"
+    return f"- {rel}: {e['name']}: {e['current']} -> {e['latest']}"
+
+
+def close_scope_stales(repo, prefix, scope, active_deps, gh_env):
+    """Closes open updater PRs in scope whose dependency is now clean."""
+    head_prefix = f"{prefix}/{scope}/" if scope else f"{prefix}/"
+    try:
+        r = run(["gh", "pr", "list", "--state", "open", "--json", "number,headRefName",
+                 "--jq", ".[].number, .[].headRefName"], cwd=str(repo), env=gh_env)
+    except Exception:
+        return
+    if r.returncode != 0:
+        return
+    tokens = (r.stdout or "").split()
+    numbers, heads = tokens[0::2], tokens[1::2]
+    for num, head in zip(numbers, heads):
+        if not head.startswith(head_prefix) or not num.isdigit():
+            continue
+        dep = head[len(head_prefix):].rsplit("-", 1)[0]
+        if dep not in active_deps:
+            try:
+                run(["gh", "pr", "close", num, "--comment",
+                     "Alya dependencies are up to date; closing."],
+                    cwd=str(repo), env=gh_env, check=True)
+                log(f"Closed stale pull request #{num} ({head}).")
+            except Exception as e:
+                log(f"Warning: could not close PR #{num} ({e}).")
+
+
 def main():
-    pkg_dir = Path(os.environ.get("INPUT_PACKAGE_DIR", ".")).resolve()
+    scan_root = Path(os.environ.get("INPUT_PACKAGE_DIR", ".")).resolve()
     create_pr = os.environ.get("INPUT_CREATE_PR", "true").lower() in ("true", "1", "yes")
     dry_run = os.environ.get("INPUT_DRY_RUN", "false").lower() in ("true", "1", "yes")
     base = os.environ.get("INPUT_BASE", "main").strip() or "main"
     prefix = os.environ.get("INPUT_BRANCH_PREFIX", "alya-deps").strip() or "alya-deps"
+    scope = os.environ.get("INPUT_BRANCH_SUFFIX", "").strip().strip("/")
     token = os.environ.get("INPUT_TOKEN", "").strip()
+    labels = [l.strip() for l in os.environ.get("INPUT_LABELS", "dependencies").split(",") if l.strip()]
+    reviewers = [r.strip() for r in os.environ.get("INPUT_REVIEWERS", "").split(",") if r.strip()]
+    gh_env = {"GH_TOKEN": token, "GITHUB_TOKEN": token} if token else None
 
-    manifest = pkg_dir / "alya.toml"
-    if not manifest.is_file():
-        log_error(f"No alya.toml found in {pkg_dir}")
+    manifests = collect_manifests(scan_root)
+    if not manifests:
+        log_error(f"No alya.toml found under {scan_root}")
         sys.exit(1)
+    repo = git_toplevel(scan_root)
+    has_compiler = bool(shutil.which("alya"))
+    log(f"Scanning {len(manifests)} manifest(s) under {scan_root} "
+        f"({'compiler' if has_compiler else 'manifest-only fallback'}).")
 
     bumps, skipped = [], []
-    if shutil.which("alya"):
-        log("Compiler found on PATH: `alya update -u` will upgrade and re-lock.")
+    for mdir in manifests:
+        manifest = mdir / "alya.toml"
         try:
-            bumps, skipped, _ = compiler_bump(pkg_dir, token, dry_run)
+            if has_compiler:
+                b, s, _ = compiler_bump(mdir, token, dry_run)
+            else:
+                b, s, new_text = fallback_bump(mdir, token, manifest)
+                if not dry_run and new_text is not None:
+                    manifest.write_text(new_text, encoding="utf-8")
+                    log(f"Updated {manifest}")
         except Exception as e:
-            log_error(str(e))
+            log_error(f"{mdir}: {e}")
             sys.exit(1)
-    else:
-        log("No `alya` on PATH: using manifest-only fallback.")
-        try:
-            bumps, skipped, new_text = fallback_bump(pkg_dir, token, manifest)
-        except Exception as e:
-            log_error(str(e))
-            sys.exit(1)
-        if dry_run:
-            pass
-        elif new_text is not None:
-            manifest.write_text(new_text, encoding="utf-8")
-            log(f"Updated {manifest}")
+        for e in b:
+            e["dir"] = str(mdir)
+        bumps.extend(b)
+        skipped.extend(f"{mdir.name}: {s}" for s in s)
 
     for b in bumps:
         log(f"{b['name']}: {short_rev(b['current'])} -> {short_rev(b['latest'])}")
@@ -409,116 +502,109 @@ def main():
     if dry_run:
         log("Dry run: no files changed.")
         write_outputs(updated=bool(bumps), summary=summary)
-        write_summary(pkg_dir.name, summary)
+        write_summary(scan_root.name, summary)
         return
 
     write_outputs(updated=bool(bumps), summary=summary)
-    write_summary(pkg_dir.name, summary)
+    write_summary(scan_root.name, summary)
 
-    # Never push straight to the base branch: update (or close) one stable
-    # PR per slug, or leave the working tree untouched with create-pr=false.
-    # The stable branch name lets repeat runs refresh the same PR instead of
-    # piling up duplicates; a clean tree closes a stale PR (Dependabot-style).
-    slug = os.environ.get("INPUT_BRANCH_SUFFIX", "").strip().strip("/") or pkg_dir.name
-    branch = f"{prefix}/{slug}"
-    labels = [l.strip() for l in os.environ.get("INPUT_LABELS", "dependencies").split(",") if l.strip()]
-    reviewers = [r.strip() for r in os.environ.get("INPUT_REVIEWERS", "").split(",") if r.strip()]
-    gh_env = {"GH_TOKEN": token, "GITHUB_TOKEN": token} if token else None
-    existing_pr = open_pr_for_branch(pkg_dir, branch, gh_env) if create_pr else None
-
-    if not bumps or not create_pr:
-        if not bumps:
-            if existing_pr:
-                try:
-                    run(["gh", "pr", "close", str(existing_pr), "--comment",
-                         "Alya dependencies are up to date; closing."],
-                        cwd=str(pkg_dir), env=gh_env, check=True)
-                    log(f"Closed stale pull request #{existing_pr}.")
-                except Exception as e:
-                    log(f"Warning: could not close PR #{existing_pr} ({e}).")
-            else:
-                log("Everything up to date.")
-        else:
-            log("create-pr=false: changes left in the working tree.")
+    if not create_pr:
+        log("create-pr=false: changes left in the working tree." if bumps else "Everything up to date.")
         return
 
+    # Group by upstream dependency: one PR per dep across all manifests.
+    groups = {}
+    for b in bumps:
+        groups.setdefault(b["name"], []).append(b)
+
     try:
-        ensure_labels(pkg_dir, labels, gh_env)
-        notes_sections = []
-        for b in bumps:
-            if b.get("kind") == "branch":
-                commits = branch_commits(b["owner"], b["repo"], b["current"], b["latest"], token)
-                section = f"#### {b['name']} (lock): {short_rev(b['current'])} -> {short_rev(b['latest'])}"
-                notes_sections.append(section + (f"\n\n```text\n{commits}\n```" if commits else ""))
-            elif b.get("kind") == "lock-new":
-                ctx = recent_commits(b["owner"], b["repo"], b["latest"], token) if b.get("owner") else ""
-                section = f"#### {b['name']} (new lock): {short_rev(b['latest'])}"
-                notes_sections.append(section + (f"\n\n```text\n{ctx}\n```" if ctx else ""))
-            else:
-                notes = release_notes(b["owner"], b["repo"], b["latest"], token)
-                if notes:
-                    notes_sections.append(f"#### {b['name']} {b['latest']}\n\n{notes}")
-        run(["git", "checkout", "-B", branch], cwd=str(pkg_dir), check=True)
-        run(["git", "config", "user.name", "github-actions[bot]"], cwd=str(pkg_dir), check=True)
-        run(
-            ["git", "config", "user.email", "github-actions[bot]@users.noreply.github.com"],
-            cwd=str(pkg_dir),
-            check=True,
-        )
-        run(["git", "add", "alya.toml"], cwd=str(pkg_dir), check=True)
-        run(["git", "add", "alya.lock"], cwd=str(pkg_dir))
-        # Belt-and-braces: never open an empty PR (e.g. lock-only drift with
-        # nothing staged, or a compiler run that normalized nothing).
-        staged = run(["git", "status", "--porcelain", "--", "alya.toml", "alya.lock"], cwd=str(pkg_dir))
-        if not (staged.stdout or "").strip():
-            log("No changes detected; skipping pull request (avoids empty PR).")
-            return
-        body_lines = []
-        for b in bumps:
-            if b.get("kind") == "branch":
-                body_lines.append(f"- {b['name']} (lock): {short_rev(b['current'])} -> {short_rev(b['latest'])}")
-            elif b.get("kind") == "lock-new":
-                body_lines.append(f"- {b['name']} (new lock): {short_rev(b['latest'])}")
-            else:
-                body_lines.append(f"- {b['name']}: {b['current']} -> {b['latest']}")
-        run(["git", "commit", "-m", "chore(deps): bump alya dependencies"], cwd=str(pkg_dir), check=True)
-        # Push with the caller token when provided: GITHUB_TOKEN honors the
-        # repo/org workflow-permissions policy (which may forbid pushes/PRs),
-        # while a PAT passed via `token` bypasses it.
+        ensure_labels(repo, labels, gh_env)
         if token:
-            remote = run(["git", "remote", "get-url", "origin"], cwd=str(pkg_dir))
+            remote = run(["git", "remote", "get-url", "origin"], cwd=str(repo))
             m = re.match(r"https://github\.com/([^/]+)/([^/]+?)(?:\.git)?$", (remote.stdout or "").strip())
             if m:
                 run(
                     ["git", "remote", "set-url", "origin",
                      f"https://x-access-token:{token}@github.com/{m.group(1)}/{m.group(2)}.git"],
-                    cwd=str(pkg_dir),
+                    cwd=str(repo),
                     check=True,
                 )
-        run(["git", "push", "-f", "origin", branch], cwd=str(pkg_dir), check=True)
-        pr_body = "Automated Alya dependency bumps by [update-alya](https://github.com/alya-lang/update-alya).\n\n" + "\n".join(body_lines)
-        if notes_sections:
-            pr_body += "\n\n### Release notes\n\n" + "\n\n".join(notes_sections)
-        if existing_pr:
-            edit_cmd = ["gh", "pr", "edit", str(existing_pr), "--body", pr_body]
-            for label in labels:
-                edit_cmd += ["--add-label", label]
-            for reviewer in reviewers:
-                edit_cmd += ["--add-reviewer", reviewer]
-            run(edit_cmd, cwd=str(pkg_dir), env=gh_env, check=True)
-            log(f"Updated pull request #{existing_pr}.")
-        else:
-            pr_cmd = ["gh", "pr", "create", "--base", base, "--head", branch,
-                      "--title", "chore(deps): bump alya dependencies", "--body", pr_body]
-            for label in labels:
-                pr_cmd += ["--label", label]
-            for reviewer in reviewers:
-                pr_cmd += ["--reviewer", reviewer]
-            pr = run(pr_cmd, cwd=str(pkg_dir), env=gh_env, check=True)
-            log(f"Opened pull request: {pr.stdout.strip()[:200]}")
+        for dep, entries in groups.items():
+            bump_dep(repo, dep, entries, base, prefix, scope, labels, reviewers, gh_env, token)
+        close_scope_stales(repo, prefix, scope, set(groups), gh_env)
+        if not groups:
+            log("Everything up to date.")
     except Exception as e:
-        log_error(f"Could not open pull request: {e}")
+        log_error(f"Could not process pull requests: {e}")
         sys.exit(1)
+
+def bump_dep(repo, dep, entries, base, prefix, scope, labels, reviewers, gh_env, token):
+    """Stages, commits, pushes and opens/refreshes one dependency PR."""
+    tag_entries = [e for e in entries if e.get("kind") == "tag"]
+    if tag_entries:
+        ver = tag_entries[0]["latest"]
+    else:
+        ver = short_rev(entries[0]["latest"])
+    branch = dep_branch(prefix, scope, dep, ver)
+    existing_pr = open_pr_for_branch(repo, branch, gh_env)
+
+    files = set()
+    for e in entries:
+        files.add(str(Path(e["dir"]) / "alya.toml"))
+        files.add(str(Path(e["dir"]) / "alya.lock"))
+    notes_sections = []
+    for b in entries:
+        if b.get("kind") == "branch":
+            commits = branch_commits(b["owner"], b["repo"], b["current"], b["latest"], token)
+            section = f"#### {b['name']} (lock): {short_rev(b['current'])} -> {short_rev(b['latest'])}"
+            notes_sections.append(section + (f"\n\n```text\n{commits}\n```" if commits else ""))
+        elif b.get("kind") == "lock-new":
+            ctx = recent_commits(b["owner"], b["repo"], b["latest"], token) if b.get("owner") else ""
+            section = f"#### {b['name']} (new lock): {short_rev(b['latest'])}"
+            notes_sections.append(section + (f"\n\n```text\n{ctx}\n```" if ctx else ""))
+        else:
+            notes = release_notes(b["owner"], b["repo"], b["latest"], token)
+            if notes:
+                notes_sections.append(f"#### {b['name']} {b['latest']}\n\n{notes}")
+    body_lines = [entry_line(repo, b) for b in entries]
+    run(["git", "checkout", "-B", branch], cwd=str(repo), check=True)
+    run(["git", "config", "user.name", "github-actions[bot]"], cwd=str(repo), check=True)
+    run(
+        ["git", "config", "user.email", "github-actions[bot]@users.noreply.github.com"],
+        cwd=str(repo),
+        check=True,
+    )
+    run(["git", "add", "--"] + sorted(files), cwd=str(repo), check=True)
+    # Belt-and-braces: never open an empty PR.
+    staged = run(["git", "status", "--porcelain", "--"] + sorted(files), cwd=str(repo))
+    if not (staged.stdout or "").strip():
+        log(f"[{dep}] No changes detected; skipping pull request (avoids empty PR).")
+        return
+    title = dep_title(dep, entries)
+    run(["git", "commit", "-m", title], cwd=str(repo), check=True)
+    run(["git", "push", "-f", "-u", "origin", branch], cwd=str(repo), check=True)
+    pr_body = "Automated Alya dependency bumps by [update-alya](https://github.com/alya-lang/update-alya).\n\n" + "\n".join(body_lines)
+    if notes_sections:
+        pr_body += "\n\n### Release notes\n\n" + "\n\n".join(notes_sections)
+    if existing_pr:
+        edit_cmd = ["gh", "pr", "edit", str(existing_pr), "--title", title, "--body", pr_body]
+        for label in labels:
+            edit_cmd += ["--add-label", label]
+        for reviewer in reviewers:
+            edit_cmd += ["--add-reviewer", reviewer]
+        run(edit_cmd, cwd=str(repo), env=gh_env, check=True)
+        log(f"[{dep}] Updated pull request #{existing_pr}.")
+    else:
+        pr_cmd = ["gh", "pr", "create", "--base", base, "--head", branch,
+                  "--title", title, "--body", pr_body]
+        for label in labels:
+            pr_cmd += ["--label", label]
+        for reviewer in reviewers:
+            pr_cmd += ["--reviewer", reviewer]
+        pr = run(pr_cmd, cwd=str(repo), env=gh_env, check=True)
+        log(f"[{dep}] Opened pull request: {pr.stdout.strip()[:200]}")
+
+
 
 
 def open_pr_for_branch(pkg_dir, branch, env):
