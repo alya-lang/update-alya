@@ -20,9 +20,9 @@ inputs:
     required: false
     default: 'false'
   base:
-    description: 'Base branch for the pull request'
+    description: 'Base branch for the pull request (defaults to the workflow branch, else main)'
     required: false
-    default: 'main'
+    default: ''
   branch-prefix:
     description: 'Prefix for the generated update branch'
     required: false

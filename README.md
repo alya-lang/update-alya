@@ -79,7 +79,7 @@ jobs:
 | `package-dir` | Scan root: every `alya.toml` below it is checked | No | `'.'` |
 | `create-pr` | Open a pull request with the bumps (`false` only updates the working tree) | No | `'true'` |
 | `dry-run` | Report outdated pins without changing any files | No | `'false'` |
-| `base` | Base branch for the pull request | No | `'main'` |
+| `base` | Base branch for the pull request | No | workflow branch, else `'main'` |
 | `branch-prefix` | Prefix for the generated update branch | No | `'alya-deps'` |
 | `branch-suffix` | Scope segment in branch names (`<prefix>/<suffix>/<dep>-<ver>`); separates parallel matrix jobs | No | `''` |
 | `labels` | Comma-separated labels attached to the PR (created if missing) | No | `'dependencies'` |

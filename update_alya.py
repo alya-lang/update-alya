@@ -600,7 +600,15 @@ def main():
         "yes",
     )
     dry_run = os.environ.get("INPUT_DRY_RUN", "false").lower() in ("true", "1", "yes")
-    base = os.environ.get("INPUT_BASE", "main").strip() or "main"
+    base = os.environ.get("INPUT_BASE", "").strip()
+    if not base:
+        # Default to the branch the workflow runs on (schedule and manual
+        # dispatches check out a branch), so PRs target develop when run
+        # there instead of always main. Other events (e.g. pull_request,
+        # whose ref is `123/merge`) fall through to 'main'.
+        if os.environ.get("GITHUB_EVENT_NAME", "") in ("push", "schedule", "workflow_dispatch"):
+            base = os.environ.get("GITHUB_REF_NAME", "").strip()
+    base = base or "main"
     prefix = os.environ.get("INPUT_BRANCH_PREFIX", "alya-deps").strip() or "alya-deps"
     scope = os.environ.get("INPUT_BRANCH_SUFFIX", "").strip().strip("/")
     token = os.environ.get("INPUT_TOKEN", "").strip()
