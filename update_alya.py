@@ -587,21 +587,38 @@ def bump_dep(repo, dep, cls, entries, base, prefix, scope, labels, reviewers, gh
         files.add(str(Path(e["dir"]) / "alya.toml"))
         files.add(str(Path(e["dir"]) / "alya.lock"))
     notes_sections = []
+    seen_notes = set()
     for b in entries:
         if b.get("kind") == "branch":
+            key = ("branch", b["owner"], b["repo"], b["current"], b["latest"])
+            if key in seen_notes:
+                continue
+            seen_notes.add(key)
             commits = changes_lines(b["owner"], b["repo"], b["current"], b["latest"], token)
             if commits:
                 notes_sections.append(
                     f"#### {b['name']} (lock): {short_rev(b['current'])} -> {short_rev(b['latest'])}"
                     f"\n\n🚀 What's Changed\n\n{commits}")
         elif b.get("kind") == "lock-new":
+            key = ("lock-new", b["owner"], b["repo"], b["latest"])
+            if key in seen_notes:
+                continue
+            seen_notes.add(key)
             commits = changes_lines(b["owner"], b["repo"], None, b["latest"], token) if b.get("owner") else ""
             if commits:
                 notes_sections.append(
                     f"#### {b['name']} (new lock): {short_rev(b['latest'])}"
                     f"\n\n🚀 What's Changed\n\n{commits}")
         else:
+            key = ("tag", b["owner"], b["repo"], b["current"], b["latest"])
+            if key in seen_notes:
+                continue
+            seen_notes.add(key)
             commits = changes_lines(b["owner"], b["repo"], b["current"], b["latest"], token)
+            if not commits:
+                # Old ref not comparable: show what's in the new release
+                # instead of dumping the raw release body.
+                commits = changes_lines(b["owner"], b["repo"], None, b["latest"], token)
             if not commits:
                 commits = release_notes(b["owner"], b["repo"], b["latest"], token)
             if commits:
