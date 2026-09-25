@@ -125,21 +125,36 @@ def branch_head_sha(owner, repo, branch, token=""):
         return None
 
 
-def branch_commits(owner, repo, base, head, token="", max_commits=10, limit=1500):
-    """Lists commits between two revs for PR descriptions (Dependabot-style)."""
+def changes_lines(owner, repo, base, head, token="", max_commits=30, limit=3000):
+    """`* subject by @user (sha)` lines between two revs (release-notes style).
+
+    Mirrors the `What's Changed` section that `generate_release_notes.py`
+    produces for package releases. With `base=None`, lists recent commits
+    ending at `head` (lock-new context). Returns "" when not retrievable.
+    """
     try:
-        data = api_get(f"https://api.github.com/repos/{owner}/{repo}/compare/{base}...{head}", token)
+        if base:
+            data = api_get(f"https://api.github.com/repos/{owner}/{repo}/compare/{base}...{head}", token)
+            items = data.get("commits", [])[:max_commits]
+            total = data.get("total_commits", len(items))
+        else:
+            data = api_get(f"https://api.github.com/repos/{owner}/{repo}/commits?sha={head}&per_page={max_commits}", token)
+            items = data if isinstance(data, list) else []
+            items = items[:max_commits]
+            total = len(items)
         lines = []
-        for c in data.get("commits", [])[:max_commits]:
+        for c in items:
             msg = (c.get("commit", {}).get("message") or "").strip().splitlines()
-            if msg:
-                lines.append(f"{(c.get('sha') or '')[:7]} {msg[0][:100]}")
+            if not msg:
+                continue
+            login = ((c.get("author") or {}).get("login") or "").strip()
+            author = f"@{login}" if login else ((c.get("commit", {}).get("author", {}).get("name") or "").strip() or "unknown")
+            lines.append(f"* {msg[0][:120]} by {author} ({(c.get('sha') or '')[:7]})")
         text = "\n".join(lines)
         if len(text) > limit:
             text = text[:limit].rstrip() + "\n…(truncated)"
-        total = data.get("total_commits", len(lines))
         if total > len(lines):
-            text += f"\n…({total - len(lines)} more commits)"
+            text += f"\n…({total - len(lines)} more)"
         return text
     except Exception:
         return ""
@@ -565,18 +580,23 @@ def bump_dep(repo, dep, cls, entries, base, prefix, scope, labels, reviewers, gh
     notes_sections = []
     for b in entries:
         if b.get("kind") == "branch":
-            commits = branch_commits(b["owner"], b["repo"], b["current"], b["latest"], token)
-            section = f"#### {b['name']} (lock): {short_rev(b['current'])} -> {short_rev(b['latest'])}"
-            notes_sections.append(section + (f"\n\n```text\n{commits}\n```" if commits else ""))
+            commits = changes_lines(b["owner"], b["repo"], b["current"], b["latest"], token)
+            if commits:
+                notes_sections.append(
+                    f"#### {b['name']} (lock): {short_rev(b['current'])} -> {short_rev(b['latest'])}"
+                    f"\n\n🚀 What's Changed\n\n{commits}")
         elif b.get("kind") == "lock-new":
-            ctx = recent_commits(b["owner"], b["repo"], b["latest"], token) if b.get("owner") else ""
-            if ctx:
-                section = f"#### {b['name']} (new lock): {short_rev(b['latest'])}"
-                notes_sections.append(section + f"\n\n```text\n{ctx}\n```")
+            commits = changes_lines(b["owner"], b["repo"], None, b["latest"], token) if b.get("owner") else ""
+            if commits:
+                notes_sections.append(
+                    f"#### {b['name']} (new lock): {short_rev(b['latest'])}"
+                    f"\n\n🚀 What's Changed\n\n{commits}")
         else:
-            notes = release_notes(b["owner"], b["repo"], b["latest"], token)
-            if notes:
-                notes_sections.append(f"#### {b['name']} {b['latest']}\n\n{notes}")
+            commits = changes_lines(b["owner"], b["repo"], b["current"], b["latest"], token)
+            if not commits:
+                commits = release_notes(b["owner"], b["repo"], b["latest"], token)
+            if commits:
+                notes_sections.append(f"#### {b['name']} {b['latest']}\n\n🚀 What's Changed\n\n{commits}")
     body_lines = [entry_line(repo, b) for b in entries]
     run(["git", "checkout", "-B", branch], cwd=str(repo), check=True)
     run(["git", "config", "user.name", "github-actions[bot]"], cwd=str(repo), check=True)
@@ -596,7 +616,7 @@ def bump_dep(repo, dep, cls, entries, base, prefix, scope, labels, reviewers, gh
     run(["git", "push", "-f", "-u", "origin", branch], cwd=str(repo), check=True)
     pr_body = "Automated Alya dependency bumps by [update-alya](https://github.com/alya-lang/update-alya).\n\n" + "\n".join(body_lines)
     if notes_sections:
-        pr_body += "\n\n### Release notes\n\n" + "\n\n".join(notes_sections)
+        pr_body += "\n\n### Changes\n\n" + "\n\n".join(notes_sections)
     if existing_pr:
         edit_cmd = ["gh", "pr", "edit", str(existing_pr), "--title", title, "--body", pr_body]
         for label in labels:
@@ -628,24 +648,6 @@ def open_pr_for_branch(pkg_dir, branch, env):
     except Exception:
         pass
     return None
-
-
-def recent_commits(owner, repo, rev, token="", max_commits=10, limit=1500):
-    """Lists recent commits ending at `rev` (context for lock-new entries)."""
-    try:
-        data = api_get(f"https://api.github.com/repos/{owner}/{repo}/commits?sha={rev}&per_page={max_commits}", token)
-        lines = []
-        items = data if isinstance(data, list) else []
-        for c in items[:max_commits]:
-            msg = (c.get("commit", {}).get("message") or "").strip().splitlines()
-            if msg:
-                lines.append(f"{(c.get('sha') or '')[:7]} {msg[0][:100]}")
-        text = "\n".join(lines)
-        if len(text) > limit:
-            text = text[:limit].rstrip() + "\n…(truncated)"
-        return text
-    except Exception:
-        return ""
 
 
 def write_outputs(updated, summary):
