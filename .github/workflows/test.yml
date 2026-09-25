@@ -5,12 +5,17 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, closed]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   test:
     name: Dry-run fixture
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.action != 'closed'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -30,3 +35,16 @@ jobs:
       - name: Verify fixture file untouched
         run: |
           grep -q 'tag = "v0.0.0"' test/fixture/alya.toml
+
+  cleanup:
+    name: Delete PR branch
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && (startsWith(github.head_ref, 'alya-deps/') || startsWith(github.head_ref, 'e2e-test/'))
+    steps:
+      - name: Delete merged or closed branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          echo "Cleaning up branch $BRANCH for closed PR #${{ github.event.pull_request.number }}..."
+          gh api --method DELETE "repos/${{ github.repository }}/git/refs/heads/${BRANCH}" || true
