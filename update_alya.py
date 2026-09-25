@@ -64,7 +64,6 @@ def api_get(url, token=""):
         return json.loads(resp.read().decode("utf-8"))
 
 
-
 def latest_release_tag(owner, repo, token=""):
     """Returns the latest release tag, or None when there is no release."""
     try:
@@ -588,7 +587,6 @@ def repo_slug(repo):
     except Exception:
         pass
     return ""
-
 
 
 def main():
