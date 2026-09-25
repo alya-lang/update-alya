@@ -53,7 +53,10 @@ def log_error(msg):
 
 def api_get(url, token=""):
     """GET JSON from the GitHub API (or any JSON URL)."""
-    headers = {"User-Agent": "alya-lang-update-alya", "Accept": "application/vnd.github+json"}
+    headers = {
+        "User-Agent": "alya-lang-update-alya",
+        "Accept": "application/vnd.github+json",
+    }
     if token:
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, headers=headers)
@@ -64,7 +67,9 @@ def api_get(url, token=""):
 def latest_release_tag(owner, repo, token=""):
     """Returns the latest release tag, or None when there is no release."""
     try:
-        data = api_get(f"https://api.github.com/repos/{owner}/{repo}/releases/latest", token)
+        data = api_get(
+            f"https://api.github.com/repos/{owner}/{repo}/releases/latest", token
+        )
         tag = (data.get("tag_name") or "").strip()
         return tag or None
     except Exception:
@@ -83,7 +88,7 @@ def parse_version(tag):
 
 
 DEP_RE = re.compile(
-    r'^(?P<indent>\s*)(?P<name>[A-Za-z0-9_-]+)\s*=\s*\{\s*'
+    r"^(?P<indent>\s*)(?P<name>[A-Za-z0-9_-]+)\s*=\s*\{\s*"
     r'git\s*=\s*"(?P<git>https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^"/]+?)(?:\.git)?)"\s*,\s*'
     r'tag\s*=\s*"(?P<tag>[^"]+)"\s*\}(?P<trail>[ \t]*(?:\r?\n)?)$'
 )
@@ -100,7 +105,7 @@ def read_pins(manifest):
 
 
 BRANCH_RE = re.compile(
-    r'^(?P<indent>\s*)(?P<name>[A-Za-z0-9_-]+)\s*=\s*\{\s*'
+    r"^(?P<indent>\s*)(?P<name>[A-Za-z0-9_-]+)\s*=\s*\{\s*"
     r'git\s*=\s*"(?P<git>https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^"/]+?)(?:\.git)?)"\s*,\s*'
     r'branch\s*=\s*"(?P<branch>[^"]+)"\s*\}(?P<trail>[ \t]*(?:\r?\n)?)$'
 )
@@ -112,20 +117,28 @@ def read_branch_pins(manifest):
     for line in manifest.read_text(encoding="utf-8").splitlines(keepends=True):
         m = BRANCH_RE.match(line)
         if m:
-            pins[m.group("name")] = (m.group("owner"), m.group("repo"), m.group("branch"))
+            pins[m.group("name")] = (
+                m.group("owner"),
+                m.group("repo"),
+                m.group("branch"),
+            )
     return pins
 
 
 def branch_head_sha(owner, repo, branch, token=""):
     """Resolves a branch to its HEAD commit SHA (None on failure)."""
     try:
-        data = api_get(f"https://api.github.com/repos/{owner}/{repo}/commits/{branch}", token)
+        data = api_get(
+            f"https://api.github.com/repos/{owner}/{repo}/commits/{branch}", token
+        )
         return (data.get("sha") or "").strip() or None
     except Exception:
         return None
 
 
-def changes_lines(owner, repo, base, head, token="", max_commits=50, limit=8000, more_link=""):
+def changes_lines(
+    owner, repo, base, head, token="", max_commits=50, limit=8000, more_link=""
+):
     """`* subject by user (sha)` lines between two revs (release-notes style).
 
     Mirrors the `What's Changed` section that `generate_release_notes.py`
@@ -136,11 +149,17 @@ def changes_lines(owner, repo, base, head, token="", max_commits=50, limit=8000,
     """
     try:
         if base:
-            data = api_get(f"https://api.github.com/repos/{owner}/{repo}/compare/{base}...{head}", token)
+            data = api_get(
+                f"https://api.github.com/repos/{owner}/{repo}/compare/{base}...{head}",
+                token,
+            )
             items = data.get("commits", [])[:max_commits]
             total = data.get("total_commits", len(items))
         else:
-            data = api_get(f"https://api.github.com/repos/{owner}/{repo}/commits?sha={head}&per_page={max_commits}", token)
+            data = api_get(
+                f"https://api.github.com/repos/{owner}/{repo}/commits?sha={head}&per_page={max_commits}",
+                token,
+            )
             items = data if isinstance(data, list) else []
             items = items[:max_commits]
             total = len(items)
@@ -152,7 +171,14 @@ def changes_lines(owner, repo, base, head, token="", max_commits=50, limit=8000,
             # Plain username, no @mention: keeps attribution without pinging
             # upstream authors on every automated PR.
             login = ((c.get("author") or {}).get("login") or "").strip()
-            author = login if login else ((c.get("commit", {}).get("author", {}).get("name") or "").strip() or "unknown")
+            author = (
+                login
+                if login
+                else (
+                    (c.get("commit", {}).get("author", {}).get("name") or "").strip()
+                    or "unknown"
+                )
+            )
             lines.append(f"* {msg[0][:120]} by {author} ({(c.get('sha') or '')[:7]})")
         text = "\n".join(lines)
         if len(text) > limit:
@@ -238,10 +264,17 @@ def lock_branch_bumps(pkg_dir, skip_names=()):
         name = base_url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
         if name in skip_names:
             continue
-        entries.append({
-            "name": name, "kind": "branch", "owner": owner, "repo": repo,
-            "branch": branch_pins.get(name, ""), "current": old_rev, "latest": new_rev,
-        })
+        entries.append(
+            {
+                "name": name,
+                "kind": "branch",
+                "owner": owner,
+                "repo": repo,
+                "branch": branch_pins.get(name, ""),
+                "current": old_rev,
+                "latest": new_rev,
+            }
+        )
     return entries
 
 
@@ -255,20 +288,26 @@ def branch_drift_notes(pkg_dir, token):
     for name, (owner, repo, branch) in branch_pins.items():
         head = branch_head_sha(owner, repo, branch, token)
         if head is None:
-            notes.append(f"{name}: could not resolve branch {branch!r} in {owner}/{repo}")
+            notes.append(
+                f"{name}: could not resolve branch {branch!r} in {owner}/{repo}"
+            )
             continue
         pinned = locked.get(name)
         if pinned is None:
             notes.append(f"{name}: branch {branch!r} not locked yet (HEAD {head[:7]})")
         elif pinned[1] != head:
-            notes.append(f"{name}: lock behind branch {branch!r} ({short_rev(pinned[1])} -> {head[:7]})")
+            notes.append(
+                f"{name}: lock behind branch {branch!r} ({short_rev(pinned[1])} -> {head[:7]})"
+            )
     return notes
 
 
 def release_notes(owner, repo, tag, token="", limit=3000):
     """Fetches an upstream release body for PR descriptions (Dependabot-style)."""
     try:
-        data = api_get(f"https://api.github.com/repos/{owner}/{repo}/releases/tags/{tag}", token)
+        data = api_get(
+            f"https://api.github.com/repos/{owner}/{repo}/releases/tags/{tag}", token
+        )
         body = (data.get("body") or "").strip()
     except Exception:
         return ""
@@ -281,7 +320,11 @@ def ensure_labels(pkg_dir, labels, env):
     """Creates missing PR labels (needs push access, already required)."""
     existing = set()
     try:
-        res = run(["gh", "label", "list", "--json", "name", "--jq", ".[].name"], cwd=str(pkg_dir), env=env)
+        res = run(
+            ["gh", "label", "list", "--json", "name", "--jq", ".[].name"],
+            cwd=str(pkg_dir),
+            env=env,
+        )
         if res.returncode == 0:
             existing = {l.strip() for l in (res.stdout or "").splitlines() if l.strip()}
     except Exception:
@@ -290,8 +333,16 @@ def ensure_labels(pkg_dir, labels, env):
         if label not in existing:
             try:
                 run(
-                    ["gh", "label", "create", label, "--description", "Alya dependency updates",
-                     "--color", "0366d6"],
+                    [
+                        "gh",
+                        "label",
+                        "create",
+                        label,
+                        "--description",
+                        "Alya dependency updates",
+                        "--color",
+                        "0366d6",
+                    ],
                     cwd=str(pkg_dir),
                     env=env,
                     check=True,
@@ -328,7 +379,16 @@ def compiler_bump(pkg_dir, token, dry_run):
                 continue
             cur_v, new_v = parse_version(current), parse_version(latest)
             if cur_v is not None and new_v is not None and new_v > cur_v:
-                bumps.append({"name": name, "kind": "tag", "owner": owner, "repo": repo, "current": current, "latest": latest})
+                bumps.append(
+                    {
+                        "name": name,
+                        "kind": "tag",
+                        "owner": owner,
+                        "repo": repo,
+                        "current": current,
+                        "latest": latest,
+                    }
+                )
         for note in branch_drift_notes(pkg_dir, token):
             skipped.append(note)
         return bumps, skipped, ""
@@ -341,29 +401,52 @@ def compiler_bump(pkg_dir, token, dry_run):
     for name, (owner, repo, old_tag) in before.items():
         new_tag = after.get(name, (None, None, old_tag))[2]
         if new_tag != old_tag:
-            bumps.append({"name": name, "kind": "tag", "owner": owner, "repo": repo, "current": old_tag, "latest": new_tag})
+            bumps.append(
+                {
+                    "name": name,
+                    "kind": "tag",
+                    "owner": owner,
+                    "repo": repo,
+                    "current": old_tag,
+                    "latest": new_tag,
+                }
+            )
     for e in lock_branch_bumps(pkg_dir, set(before)):
         if not any(b["name"] == e["name"] for b in bumps):
             bumps.append(e)
     if not bumps:
         # A freshly created (untracked) lock is still a change worth a PR:
         # cover it with informational entries instead of reporting up-to-date.
-        st = run(["git", "status", "--porcelain", "--", "alya.toml", "alya.lock"], cwd=str(pkg_dir))
+        st = run(
+            ["git", "status", "--porcelain", "--", "alya.toml", "alya.lock"],
+            cwd=str(pkg_dir),
+        )
         if "alya.lock" in (st.stdout or ""):
             branch_pins = {}
             try:
-                for bname, (_, _, bbranch) in read_branch_pins(pkg_dir / "alya.toml").items():
+                for bname, (_, _, bbranch) in read_branch_pins(
+                    pkg_dir / "alya.toml"
+                ).items():
                     branch_pins[bname] = bbranch
             except Exception:
                 pass
             for name, (url, rev) in read_lock_sources(pkg_dir).items():
                 base_url = url.split("?", 1)[0]
-                mo = re.match(r"https://github\.com/([^/]+)/([^/]+?)(?:\.git)?$", base_url)
+                mo = re.match(
+                    r"https://github\.com/([^/]+)/([^/]+?)(?:\.git)?$", base_url
+                )
                 owner, repo = (mo.group(1), mo.group(2)) if mo else ("", "")
-                bumps.append({
-                    "name": name, "kind": "lock-new", "owner": owner, "repo": repo,
-                    "branch": branch_pins.get(name, ""), "current": "(absent)", "latest": rev,
-                })
+                bumps.append(
+                    {
+                        "name": name,
+                        "kind": "lock-new",
+                        "owner": owner,
+                        "repo": repo,
+                        "branch": branch_pins.get(name, ""),
+                        "current": "(absent)",
+                        "latest": rev,
+                    }
+                )
     return bumps, skipped, output
 
 
@@ -375,13 +458,20 @@ def fallback_bump(pkg_dir, token, manifest):
     for note in branch_drift_notes(pkg_dir, token):
         skipped.append(note)
     if (pkg_dir / "alya.lock").exists():
-        skipped.append("alya.lock present but no `alya` on PATH: manifest-only bumps would leave a stale lock; add alya-lang/setup-alya before this step")
+        skipped.append(
+            "alya.lock present but no `alya` on PATH: manifest-only bumps would leave a stale lock; add alya-lang/setup-alya before this step"
+        )
         return [], skipped, None
     for i, line in enumerate(lines):
         m = DEP_RE.match(line)
         if not m:
             continue
-        name, owner, repo, current = m.group("name"), m.group("owner"), m.group("repo"), m.group("tag")
+        name, owner, repo, current = (
+            m.group("name"),
+            m.group("owner"),
+            m.group("repo"),
+            m.group("tag"),
+        )
         checked += 1
         latest = latest_release_tag(owner, repo, token)
         if latest is None:
@@ -390,13 +480,25 @@ def fallback_bump(pkg_dir, token, manifest):
         cur_v, new_v = parse_version(current), parse_version(latest)
         if cur_v is None or new_v is None:
             if latest != current:
-                skipped.append(f"{name}: non-semver pin {current!r} (latest {latest!r}), left untouched")
+                skipped.append(
+                    f"{name}: non-semver pin {current!r} (latest {latest!r}), left untouched"
+                )
             continue
         if new_v > cur_v:
-            bumps.append({"name": name, "kind": "tag", "owner": owner, "repo": repo, "current": current, "latest": latest})
+            bumps.append(
+                {
+                    "name": name,
+                    "kind": "tag",
+                    "owner": owner,
+                    "repo": repo,
+                    "current": current,
+                    "latest": latest,
+                }
+            )
             lines[i] = line.replace(f'tag = "{current}"', f'tag = "{latest}"', 1)
     new_text = "".join(lines) if bumps else None
     return bumps, skipped, new_text
+
 
 def git_toplevel(start):
     """Returns the enclosing git repo root, or `start` when not in a repo."""
@@ -413,7 +515,20 @@ def collect_manifests(root):
     """Finds dirs containing alya.toml under `root` (skips caches/VCS)."""
     found = []
     for dp, dn, fn in os.walk(root):
-        dn[:] = [d for d in dn if d not in (".git", ".alya", "target", "node_modules", "__pycache__", ".venv", "vendor")]
+        dn[:] = [
+            d
+            for d in dn
+            if d
+            not in (
+                ".git",
+                ".alya",
+                "target",
+                "node_modules",
+                "__pycache__",
+                ".venv",
+                "vendor",
+            )
+        ]
         if "alya.toml" in fn:
             found.append(Path(dp))
     return sorted(found)
@@ -464,7 +579,9 @@ def repo_slug(repo):
     """Returns 'owner/name' from the origin remote, or ''."""
     try:
         r = run(["git", "remote", "get-url", "origin"], cwd=str(repo))
-        m = re.match(r"https://github\.com/([^/]+)/([^/]+?)(?:\.git)?$", (r.stdout or "").strip())
+        m = re.match(
+            r"https://github\.com/([^/]+)/([^/]+?)(?:\.git)?$", (r.stdout or "").strip()
+        )
         if m:
             return f"{m.group(1)}/{m.group(2)}"
     except Exception:
@@ -477,8 +594,21 @@ def close_scope_stales(repo, prefix, scope, active_deps, gh_env):
     closed = []
     head_prefix = f"{prefix}/{scope}/" if scope else f"{prefix}/"
     try:
-        r = run(["gh", "pr", "list", "--state", "open", "--json", "number,headRefName",
-                 "--jq", ".[].number, .[].headRefName"], cwd=str(repo), env=gh_env)
+        r = run(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--state",
+                "open",
+                "--json",
+                "number,headRefName",
+                "--jq",
+                ".[].number, .[].headRefName",
+            ],
+            cwd=str(repo),
+            env=gh_env,
+        )
     except Exception:
         return closed
     if r.returncode != 0:
@@ -488,31 +618,65 @@ def close_scope_stales(repo, prefix, scope, active_deps, gh_env):
     for num, head in zip(numbers, heads):
         if not head.startswith(head_prefix) or not num.isdigit():
             continue
-        rest = head[len(head_prefix):]
-        dep = next((d for d in sorted(active_deps, key=len, reverse=True)
-                    if rest == d or rest.startswith(d + "-")), None)
+        rest = head[len(head_prefix) :]
+        dep = next(
+            (
+                d
+                for d in sorted(active_deps, key=len, reverse=True)
+                if rest == d or rest.startswith(d + "-")
+            ),
+            None,
+        )
         if dep is None or dep in active_deps:
             continue
         try:
-            run(["gh", "pr", "close", num, "--comment",
-                 "Alya dependencies are up to date; closing."],
-                cwd=str(repo), env=gh_env, check=True)
+            run(
+                [
+                    "gh",
+                    "pr",
+                    "close",
+                    num,
+                    "--comment",
+                    "Alya dependencies are up to date; closing.",
+                ],
+                cwd=str(repo),
+                env=gh_env,
+                check=True,
+            )
             log(f"Closed stale pull request #{num} ({head}).")
             closed.append(num)
             try:
-                run(["git", "push", "origin", "--delete", head], cwd=str(repo), check=True)
+                run(
+                    ["git", "push", "origin", "--delete", head],
+                    cwd=str(repo),
+                    check=True,
+                )
                 log(f"Deleted branch {head}.")
             except Exception as e:
                 log(f"Warning: could not delete branch {head} ({e}).")
         except Exception as e:
-                log(f"Warning: could not close PR #{num} ({e}).")
+            log(f"Warning: could not close PR #{num} ({e}).")
     # Backstop: delete branches of already-closed updater PRs (merged or
     # manually closed elsewhere), so nothing lingers even without the
     # template cleanup workflow.
     try:
-        r = run(["gh", "pr", "list", "--state", "closed", "--limit", "100",
-                 "--json", "number,headRefName",
-                 "--jq", ".[].number, .[].headRefName"], cwd=str(repo), env=gh_env)
+        r = run(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--state",
+                "closed",
+                "--limit",
+                "100",
+                "--json",
+                "number,headRefName",
+                "--jq",
+                ".[].number, .[].headRefName",
+            ],
+            cwd=str(repo),
+            env=gh_env,
+        )
     except Exception:
         return closed
     if r.returncode != 0:
@@ -531,14 +695,24 @@ def close_scope_stales(repo, prefix, scope, active_deps, gh_env):
 
 def main():
     scan_root = Path(os.environ.get("INPUT_PACKAGE_DIR", ".")).resolve()
-    create_pr = os.environ.get("INPUT_CREATE_PR", "true").lower() in ("true", "1", "yes")
+    create_pr = os.environ.get("INPUT_CREATE_PR", "true").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
     dry_run = os.environ.get("INPUT_DRY_RUN", "false").lower() in ("true", "1", "yes")
     base = os.environ.get("INPUT_BASE", "main").strip() or "main"
     prefix = os.environ.get("INPUT_BRANCH_PREFIX", "alya-deps").strip() or "alya-deps"
     scope = os.environ.get("INPUT_BRANCH_SUFFIX", "").strip().strip("/")
     token = os.environ.get("INPUT_TOKEN", "").strip()
-    labels = [l.strip() for l in os.environ.get("INPUT_LABELS", "dependencies").split(",") if l.strip()]
-    reviewers = [r.strip() for r in os.environ.get("INPUT_REVIEWERS", "").split(",") if r.strip()]
+    labels = [
+        l.strip()
+        for l in os.environ.get("INPUT_LABELS", "dependencies").split(",")
+        if l.strip()
+    ]
+    reviewers = [
+        r.strip() for r in os.environ.get("INPUT_REVIEWERS", "").split(",") if r.strip()
+    ]
     gh_env = {"GH_TOKEN": token, "GITHUB_TOKEN": token} if token else None
 
     manifests = collect_manifests(scan_root)
@@ -547,8 +721,10 @@ def main():
         sys.exit(1)
     repo = git_toplevel(scan_root)
     has_compiler = bool(shutil.which("alya"))
-    log(f"Scanning {len(manifests)} manifest(s) under {scan_root} "
-        f"({'compiler' if has_compiler else 'manifest-only fallback'}).")
+    log(
+        f"Scanning {len(manifests)} manifest(s) under {scan_root} "
+        f"({'compiler' if has_compiler else 'manifest-only fallback'})."
+    )
 
     bumps, skipped = [], []
     for mdir in manifests:
@@ -586,11 +762,18 @@ def main():
             change = f"{b['current']} → {b['latest']}"
         table.append(f"| `{b['name']}` | `{rel}` | {change} |")
     summary = "\n".join(
-        [f"{len(bumps)} bump(s) across {len(manifests)} manifest(s), {len(skipped)} skipped.",
-         ""] + table
+        [
+            f"{len(bumps)} bump(s) across {len(manifests)} manifest(s), {len(skipped)} skipped.",
+            "",
+        ]
+        + table
     )
     if skipped:
-        summary += "\n\n<details><summary>Skipped</summary>\n\n" + "\n".join(f"- {s}" for s in skipped) + "\n</details>"
+        summary += (
+            "\n\n<details><summary>Skipped</summary>\n\n"
+            + "\n".join(f"- {s}" for s in skipped)
+            + "\n</details>"
+        )
 
     if dry_run:
         log("Dry run: no files changed.")
@@ -599,7 +782,11 @@ def main():
         return
 
     if not create_pr:
-        log("create-pr=false: changes left in the working tree." if bumps else "Everything up to date.")
+        log(
+            "create-pr=false: changes left in the working tree."
+            if bumps
+            else "Everything up to date."
+        )
         return
 
     # Group by (upstream dependency, change class): version bumps and lock
@@ -614,20 +801,42 @@ def main():
         ensure_labels(repo, labels, gh_env)
         if token:
             remote = run(["git", "remote", "get-url", "origin"], cwd=str(repo))
-            m = re.match(r"https://github\.com/([^/]+)/([^/]+?)(?:\.git)?$", (remote.stdout or "").strip())
+            m = re.match(
+                r"https://github\.com/([^/]+)/([^/]+?)(?:\.git)?$",
+                (remote.stdout or "").strip(),
+            )
             if m:
                 run(
-                    ["git", "remote", "set-url", "origin",
-                     f"https://x-access-token:{token}@github.com/{m.group(1)}/{m.group(2)}.git"],
+                    [
+                        "git",
+                        "remote",
+                        "set-url",
+                        "origin",
+                        f"https://x-access-token:{token}@github.com/{m.group(1)}/{m.group(2)}.git",
+                    ],
                     cwd=str(repo),
                     check=True,
                 )
         pr_events = []
         for (dep, cls), entries in groups.items():
-            ev = bump_dep(repo, dep, cls, entries, base, prefix, scope, labels, reviewers, gh_env, token)
+            ev = bump_dep(
+                repo,
+                dep,
+                cls,
+                entries,
+                base,
+                prefix,
+                scope,
+                labels,
+                reviewers,
+                gh_env,
+                token,
+            )
             if ev[0]:
                 pr_events.append((dep,) + ev)
-        for num in close_scope_stales(repo, prefix, scope, {dep for dep, _ in groups}, gh_env):
+        for num in close_scope_stales(
+            repo, prefix, scope, {dep for dep, _ in groups}, gh_env
+        ):
             pr_events.append(("", "closed", num))
         slug = repo_slug(repo)
         if pr_events:
@@ -646,7 +855,10 @@ def main():
     write_outputs(updated=bool(bumps), summary=summary)
     write_summary(scan_root.name, summary)
 
-def bump_dep(repo, dep, cls, entries, base, prefix, scope, labels, reviewers, gh_env, token):
+
+def bump_dep(
+    repo, dep, cls, entries, base, prefix, scope, labels, reviewers, gh_env, token
+):
     """Stages, commits, pushes and opens/refreshes one dependency PR."""
     tag_entries = [e for e in entries if e.get("kind") == "tag"]
     if tag_entries:
@@ -670,12 +882,18 @@ def bump_dep(repo, dep, cls, entries, base, prefix, scope, labels, reviewers, gh
                 continue
             seen_notes.add(key)
             commits = changes_lines(
-                b["owner"], b["repo"], b["current"], b["latest"], token,
-                more_link=f"https://github.com/{b['owner']}/{b['repo']}/compare/{b['current']}...{b['latest']}")
+                b["owner"],
+                b["repo"],
+                b["current"],
+                b["latest"],
+                token,
+                more_link=f"https://github.com/{b['owner']}/{b['repo']}/compare/{b['current']}...{b['latest']}",
+            )
             if commits:
                 notes_sections.append(
                     f"#### {b['name']} (lock): {short_rev(b['current'])} -> {short_rev(b['latest'])}"
-                    f"\n\n🚀 What's Changed\n\n{commits}")
+                    f"\n\n🚀 What's Changed\n\n{commits}"
+                )
         elif b.get("kind") == "lock-new":
             key = ("lock-new", b["owner"], b["repo"], b["latest"])
             if key in seen_notes:
@@ -684,33 +902,53 @@ def bump_dep(repo, dep, cls, entries, base, prefix, scope, labels, reviewers, gh
             commits = ""
             if b.get("owner"):
                 commits = changes_lines(
-                    b["owner"], b["repo"], None, b["latest"], token,
-                    more_link=f"https://github.com/{b['owner']}/{b['repo']}/commits/{b['latest']}")
+                    b["owner"],
+                    b["repo"],
+                    None,
+                    b["latest"],
+                    token,
+                    more_link=f"https://github.com/{b['owner']}/{b['repo']}/commits/{b['latest']}",
+                )
             if commits:
                 notes_sections.append(
                     f"#### {b['name']} (new lock): {short_rev(b['latest'])}"
-                    f"\n\n🚀 What's Changed\n\n{commits}")
+                    f"\n\n🚀 What's Changed\n\n{commits}"
+                )
         else:
             key = ("tag", b["owner"], b["repo"], b["current"], b["latest"])
             if key in seen_notes:
                 continue
             seen_notes.add(key)
             commits = changes_lines(
-                b["owner"], b["repo"], b["current"], b["latest"], token,
-                more_link=f"https://github.com/{b['owner']}/{b['repo']}/releases/tag/{b['latest']}")
+                b["owner"],
+                b["repo"],
+                b["current"],
+                b["latest"],
+                token,
+                more_link=f"https://github.com/{b['owner']}/{b['repo']}/releases/tag/{b['latest']}",
+            )
             if not commits:
                 # Old ref not comparable: show what's in the new release
                 # instead of dumping the raw release body.
                 commits = changes_lines(
-                    b["owner"], b["repo"], None, b["latest"], token,
-                    more_link=f"https://github.com/{b['owner']}/{b['repo']}/releases/tag/{b['latest']}")
+                    b["owner"],
+                    b["repo"],
+                    None,
+                    b["latest"],
+                    token,
+                    more_link=f"https://github.com/{b['owner']}/{b['repo']}/releases/tag/{b['latest']}",
+                )
             if not commits:
                 commits = release_notes(b["owner"], b["repo"], b["latest"], token)
             if commits:
-                notes_sections.append(f"#### {b['name']} {b['latest']}\n\n🚀 What's Changed\n\n{commits}")
+                notes_sections.append(
+                    f"#### {b['name']} {b['latest']}\n\n🚀 What's Changed\n\n{commits}"
+                )
     body_lines = [entry_line(repo, b) for b in entries]
     run(["git", "checkout", "-B", branch], cwd=str(repo), check=True)
-    run(["git", "config", "user.name", "github-actions[bot]"], cwd=str(repo), check=True)
+    run(
+        ["git", "config", "user.name", "github-actions[bot]"], cwd=str(repo), check=True
+    )
     run(
         ["git", "config", "user.email", "github-actions[bot]@users.noreply.github.com"],
         cwd=str(repo),
@@ -725,11 +963,23 @@ def bump_dep(repo, dep, cls, entries, base, prefix, scope, labels, reviewers, gh
     title = dep_title(dep, entries)
     run(["git", "commit", "-m", title], cwd=str(repo), check=True)
     run(["git", "push", "-f", "-u", "origin", branch], cwd=str(repo), check=True)
-    pr_body = "Automated Alya dependency bumps by [update-alya](https://github.com/alya-lang/update-alya).\n\n" + "\n".join(body_lines)
+    pr_body = (
+        "Automated Alya dependency bumps by [update-alya](https://github.com/alya-lang/update-alya).\n\n"
+        + "\n".join(body_lines)
+    )
     if notes_sections:
         pr_body += "\n\n### Changes\n\n" + "\n\n".join(notes_sections)
     if existing_pr:
-        edit_cmd = ["gh", "pr", "edit", str(existing_pr), "--title", title, "--body", pr_body]
+        edit_cmd = [
+            "gh",
+            "pr",
+            "edit",
+            str(existing_pr),
+            "--title",
+            title,
+            "--body",
+            pr_body,
+        ]
         for label in labels:
             edit_cmd += ["--add-label", label]
         for reviewer in reviewers:
@@ -738,8 +988,19 @@ def bump_dep(repo, dep, cls, entries, base, prefix, scope, labels, reviewers, gh
         log(f"[{dep}] Updated pull request #{existing_pr}.")
         return "updated", existing_pr
     else:
-        pr_cmd = ["gh", "pr", "create", "--base", base, "--head", branch,
-                  "--title", title, "--body", pr_body]
+        pr_cmd = [
+            "gh",
+            "pr",
+            "create",
+            "--base",
+            base,
+            "--head",
+            branch,
+            "--title",
+            title,
+            "--body",
+            pr_body,
+        ]
         for label in labels:
             pr_cmd += ["--label", label]
         for reviewer in reviewers:
@@ -750,13 +1011,26 @@ def bump_dep(repo, dep, cls, entries, base, prefix, scope, labels, reviewers, gh
         return "opened", int(m.group(1)) if m else None
 
 
-
-
 def open_pr_for_branch(pkg_dir, branch, env):
     """Returns the open PR number for `branch`, or None."""
     try:
-        r = run(["gh", "pr", "list", "--head", branch, "--state", "open",
-                 "--json", "number", "--jq", ".[0].number"], cwd=str(pkg_dir), env=env)
+        r = run(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--head",
+                branch,
+                "--state",
+                "open",
+                "--json",
+                "number",
+                "--jq",
+                ".[0].number",
+            ],
+            cwd=str(pkg_dir),
+            env=env,
+        )
         if r.returncode == 0 and (r.stdout or "").strip().isdigit():
             return int((r.stdout or "").strip())
     except Exception:
