@@ -317,7 +317,8 @@ def compiler_bump(pkg_dir, token, dry_run):
         st = run(["git", "status", "--porcelain", "--", "alya.toml", "alya.lock"], cwd=str(pkg_dir))
         if "alya.lock" in (st.stdout or ""):
             for name, (url, rev) in read_lock_sources(pkg_dir).items():
-                mo = re.match(r"https://github\.com/([^/]+)/([^/]+?)(?:\.git)?$", url)
+                base_url = url.split("?", 1)[0]
+                mo = re.match(r"https://github\.com/([^/]+)/([^/]+?)(?:\.git)?$", base_url)
                 owner, repo = (mo.group(1), mo.group(2)) if mo else ("", "")
                 bumps.append({
                     "name": name, "kind": "lock-new", "owner": owner, "repo": repo,
@@ -560,8 +561,9 @@ def bump_dep(repo, dep, entries, base, prefix, scope, labels, reviewers, gh_env,
             notes_sections.append(section + (f"\n\n```text\n{commits}\n```" if commits else ""))
         elif b.get("kind") == "lock-new":
             ctx = recent_commits(b["owner"], b["repo"], b["latest"], token) if b.get("owner") else ""
-            section = f"#### {b['name']} (new lock): {short_rev(b['latest'])}"
-            notes_sections.append(section + (f"\n\n```text\n{ctx}\n```" if ctx else ""))
+            if ctx:
+                section = f"#### {b['name']} (new lock): {short_rev(b['latest'])}"
+                notes_sections.append(section + f"\n\n```text\n{ctx}\n```")
         else:
             notes = release_notes(b["owner"], b["repo"], b["latest"], token)
             if notes:
