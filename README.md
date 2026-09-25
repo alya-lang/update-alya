@@ -109,8 +109,7 @@ jobs:
 - 🔀 Branch pins: manifest keeps `branch = "…"`, the lock rev is refreshed via the compiler path; PRs list the commits between revs (no release changelog exists for branches). Without a compiler, lock drift is reported read-only.
 - 🚫 Empty-PR guard: a pull request opens only when `alya.toml`/`alya.lock` actually changed.
 - ⏭️ The package `version` and `alya-version` fields are never touched.
-- 🔀 Changes never go straight to the base branch: one stable branch per package (`<prefix>/<suffix>` or `<prefix>/<dep>-<ver>`) plus pull request (or working tree only with `create-pr: 'false'`). Repeat runs refresh the same PR instead of piling up duplicates, and a clean tree closes a stale PR.
-- 🧹 Stale PRs are closed with their branch deleted; already-closed or merged updater PR branches are pruned on subsequent runs via GitHub API.
+- 🔀 Changes never go straight to the base branch: one stable branch per package (`<prefix>/<suffix>` or `<prefix>/<dep>-<ver>`) plus pull request (or working tree only with `create-pr: 'false'`). Repeat runs refresh the same PR instead of piling up duplicates.
 
 ### 🧹 Instant Branch Cleanup on PR Merge / Close
 

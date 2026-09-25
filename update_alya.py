@@ -64,18 +64,6 @@ def api_get(url, token=""):
         return json.loads(resp.read().decode("utf-8"))
 
 
-def api_delete(url, token=""):
-    """DELETE a resource via the GitHub API (returns True on success)."""
-    headers = {
-        "User-Agent": "alya-lang-update-alya",
-        "Accept": "application/vnd.github+json",
-    }
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    req = urllib.request.Request(url, headers=headers, method="DELETE")
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return resp.status in (200, 204)
-
 
 def latest_release_tag(owner, repo, token=""):
     """Returns the latest release tag, or None when there is no release."""
@@ -602,159 +590,6 @@ def repo_slug(repo):
     return ""
 
 
-def delete_remote_branch(repo, head, gh_env=None, token=""):
-    """Deletes a remote branch via the GitHub API, falling back to gh CLI or git push."""
-    slug = repo_slug(repo)
-    # 1. Try direct GitHub REST API (most reliable, bypasses git push credential issues)
-    if slug and token:
-        try:
-            url = f"https://api.github.com/repos/{slug}/git/refs/heads/{head}"
-            api_delete(url, token)
-            log(f"Deleted remote branch {head}.")
-            return True
-        except urllib.error.HTTPError as e:
-            if e.code in (404, 422):
-                # Branch already deleted or ref missing
-                return True
-            log(f"Warning: API delete failed for {head} (HTTP {e.code}).")
-        except Exception as e:
-            log(f"Warning: API delete failed for {head}: {e}")
-
-    # 2. Try gh CLI
-    if slug and gh_env:
-        try:
-            r = run(
-                [
-                    "gh",
-                    "api",
-                    "--method",
-                    "DELETE",
-                    f"repos/{slug}/git/refs/heads/{head}",
-                ],
-                cwd=str(repo),
-                env=gh_env,
-            )
-            if r.returncode == 0:
-                log(f"Deleted remote branch {head} via gh CLI.")
-                return True
-        except Exception:
-            pass
-
-    # 3. Fallback to git push origin --delete
-    try:
-        r = run(
-            ["git", "push", "origin", "--delete", head],
-            cwd=str(repo),
-        )
-        if r.returncode == 0:
-            log(f"Deleted remote branch {head} via git push.")
-            return True
-    except Exception as e:
-        log(f"Warning: could not delete branch {head}: {e}")
-    return False
-
-
-def close_scope_stales(repo, prefix, scope, active_deps, gh_env, token=""):
-    """Closes open updater PRs in scope whose dependency is now clean, and deletes their branches."""
-    closed = []
-    head_prefix = f"{prefix}/{scope}/" if scope else f"{prefix}/"
-    try:
-        r = run(
-            [
-                "gh",
-                "pr",
-                "list",
-                "--state",
-                "open",
-                "--json",
-                "number,headRefName",
-            ],
-            cwd=str(repo),
-            env=gh_env,
-        )
-    except Exception:
-        return closed
-    if r.returncode != 0:
-        return closed
-
-    try:
-        open_prs = json.loads(r.stdout or "[]")
-    except Exception:
-        open_prs = []
-
-    for item in open_prs:
-        num = str(item.get("number") or "")
-        head = item.get("headRefName") or ""
-        if not head.startswith(head_prefix) or not num.isdigit():
-            continue
-        rest = head[len(head_prefix) :]
-        dep = next(
-            (
-                d
-                for d in sorted(active_deps, key=len, reverse=True)
-                if rest == d or rest.startswith(d + "-")
-            ),
-            None,
-        )
-        if dep is None or dep in active_deps:
-            continue
-        try:
-            run(
-                [
-                    "gh",
-                    "pr",
-                    "close",
-                    num,
-                    "--comment",
-                    "Alya dependencies are up to date; closing.",
-                ],
-                cwd=str(repo),
-                env=gh_env,
-                check=True,
-            )
-            log(f"Closed stale pull request #{num} ({head}).")
-            closed.append(num)
-            delete_remote_branch(repo, head, gh_env, token)
-        except Exception as e:
-            log(f"Warning: could not close PR #{num} ({e}).")
-
-    # Backstop: delete branches of already-closed updater PRs (merged or
-    # manually closed elsewhere), so nothing lingers even without the
-    # template cleanup workflow.
-    try:
-        r = run(
-            [
-                "gh",
-                "pr",
-                "list",
-                "--state",
-                "closed",
-                "--limit",
-                "100",
-                "--json",
-                "number,headRefName",
-            ],
-            cwd=str(repo),
-            env=gh_env,
-        )
-    except Exception:
-        return closed
-    if r.returncode != 0:
-        return closed
-
-    try:
-        closed_prs = json.loads(r.stdout or "[]")
-    except Exception:
-        closed_prs = []
-
-    for item in closed_prs:
-        num = str(item.get("number") or "")
-        head = item.get("headRefName") or ""
-        if not head.startswith(head_prefix):
-            continue
-        delete_remote_branch(repo, head, gh_env, token)
-    return closed
-
 
 def main():
     scan_root = Path(os.environ.get("INPUT_PACKAGE_DIR", ".")).resolve()
@@ -897,10 +732,6 @@ def main():
             )
             if ev[0]:
                 pr_events.append((dep,) + ev)
-        for num in close_scope_stales(
-            repo, prefix, scope, {dep for dep, _ in groups}, gh_env, token
-        ):
-            pr_events.append(("", "closed", num))
         slug = repo_slug(repo)
         if pr_events:
             summary += "\n\n### Pull requests\n"
