@@ -902,7 +902,7 @@ def bump_dep(
         m = re.search(r"/pull/(\d+)", pr.stdout or "")
         pr_number = int(m.group(1)) if m else None
         if pr_number:
-            close_superseded_prs(repo, prefix, scope, dep, pr_number, gh_env)
+            close_superseded_prs(repo, prefix, scope, dep, cls, pr_number, gh_env)
         return "opened", pr_number
 
 
@@ -933,8 +933,8 @@ def open_pr_for_branch(pkg_dir, branch, env):
     return None
 
 
-def close_superseded_prs(repo, prefix, scope, dep, current_pr_num, gh_env):
-    """Closes older open PRs for the same dependency that have been superseded."""
+def close_superseded_prs(repo, prefix, scope, dep, cls, current_pr_num, gh_env):
+    """Closes older open PRs for the same dependency and change class (version vs lock) that have been superseded."""
     if not current_pr_num:
         return
     head_prefix = f"{prefix}/{scope}/" if scope else f"{prefix}/"
@@ -969,10 +969,21 @@ def close_superseded_prs(repo, prefix, scope, dep, current_pr_num, gh_env):
         if not head.startswith(head_prefix):
             continue
         rest = head[len(head_prefix) :]
-        is_dep_title = title == f"chore(deps): bump {dep}" or title.startswith(
-            f"chore(deps): bump {dep} "
-        )
-        if rest.startswith(f"{dep_slug}-") and is_dep_title:
+        if not rest.startswith(f"{dep_slug}-"):
+            continue
+
+        # Distinguish between version (tag) bumps and lock (branch) refreshes:
+        # Version PRs have "chore(deps): bump <dep> from <old> to <new>"
+        # Lock PRs have "chore(deps): bump <dep> (<branch>)" or "chore(deps): bump <dep>"
+        if cls == "version":
+            is_matching_class = title.startswith(f"chore(deps): bump {dep} from ")
+        else:
+            is_matching_class = (
+                title == f"chore(deps): bump {dep}"
+                or title.startswith(f"chore(deps): bump {dep} (")
+            )
+
+        if is_matching_class:
             try:
                 run(
                     [
