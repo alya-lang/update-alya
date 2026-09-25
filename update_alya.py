@@ -900,7 +900,10 @@ def bump_dep(
         pr = run(pr_cmd, cwd=str(repo), env=gh_env, check=True)
         log(f"[{dep}] Opened pull request: {pr.stdout.strip()[:200]}")
         m = re.search(r"/pull/(\d+)", pr.stdout or "")
-        return "opened", int(m.group(1)) if m else None
+        pr_number = int(m.group(1)) if m else None
+        if pr_number:
+            close_superseded_prs(repo, prefix, scope, dep, pr_number, gh_env)
+        return "opened", pr_number
 
 
 def open_pr_for_branch(pkg_dir, branch, env):
@@ -928,6 +931,66 @@ def open_pr_for_branch(pkg_dir, branch, env):
     except Exception:
         pass
     return None
+
+
+def close_superseded_prs(repo, prefix, scope, dep, current_pr_num, gh_env):
+    """Closes older open PRs for the same dependency that have been superseded."""
+    if not current_pr_num:
+        return
+    head_prefix = f"{prefix}/{scope}/" if scope else f"{prefix}/"
+    dep_slug = dep.replace("/", "-")
+    try:
+        r = run(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--state",
+                "open",
+                "--json",
+                "number,headRefName,title",
+            ],
+            cwd=str(repo),
+            env=gh_env,
+        )
+        if r.returncode != 0:
+            return
+        open_prs = json.loads(r.stdout or "[]")
+    except Exception:
+        return
+
+    for item in open_prs:
+        num = str(item.get("number") or "")
+        head = item.get("headRefName") or ""
+        title = item.get("title") or ""
+        if not num.isdigit() or int(num) == current_pr_num:
+            continue
+        if not head.startswith(head_prefix):
+            continue
+        rest = head[len(head_prefix) :]
+        is_dep_title = title == f"chore(deps): bump {dep}" or title.startswith(
+            f"chore(deps): bump {dep} "
+        )
+        if rest.startswith(f"{dep_slug}-") and is_dep_title:
+            try:
+                run(
+                    [
+                        "gh",
+                        "pr",
+                        "close",
+                        num,
+                        "--comment",
+                        f"Superseded by #{current_pr_num}.",
+                    ],
+                    cwd=str(repo),
+                    env=gh_env,
+                    check=True,
+                )
+                log(
+                    f"[{dep}] Closed superseded pull request #{num} ({head}) in favor of #{current_pr_num}."
+                )
+            except Exception as e:
+                log(f"Warning: could not close superseded PR #{num} ({e}).")
 
 
 def write_outputs(updated, summary):

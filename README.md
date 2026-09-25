@@ -105,6 +105,7 @@ jobs:
 - **No Duplicate PRs:** Re-running the action updates the existing branch and PR instead of creating duplicates.
 - **Empty-PR Guard:** Never opens a PR if `alya.toml` and `alya.lock` haven't changed.
 - **Detailed Changelogs:** Pull request descriptions include commit lists and release notes comparing old and new revisions.
+- **Superseded PR Cleanup:** When a newer version of a dependency opens a new PR, older open PRs for that dependency are automatically closed with a reference comment (`Superseded by #...`), triggering the repository's branch cleanup workflow.
 
 ---
 
