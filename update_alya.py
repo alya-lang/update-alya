@@ -576,11 +576,14 @@ def entry_line(repo, e):
 
 
 def repo_slug(repo):
-    """Returns 'owner/name' from the origin remote, or ''."""
+    """Returns 'owner/name' from GITHUB_REPOSITORY or the origin remote, or ''."""
+    slug = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    if slug:
+        return slug
     try:
         r = run(["git", "remote", "get-url", "origin"], cwd=str(repo))
-        m = re.match(
-            r"https://github\.com/([^/]+)/([^/]+?)(?:\.git)?$", (r.stdout or "").strip()
+        m = re.search(
+            r"github\.com[/:]([^/]+)/([^/]+?)(?:\.git)?$", (r.stdout or "").strip()
         )
         if m:
             return f"{m.group(1)}/{m.group(2)}"
@@ -1008,7 +1011,7 @@ def close_superseded_prs(repo, prefix, scope, dep, cls, current_pr_num, gh_env):
             # cleanup workflows. Delete the superseded branch directly via the GitHub API.
             if slug:
                 try:
-                    run(
+                    res = run(
                         [
                             "gh",
                             "api",
@@ -1019,7 +1022,12 @@ def close_superseded_prs(repo, prefix, scope, dep, cls, current_pr_num, gh_env):
                         cwd=str(repo),
                         env=gh_env,
                     )
-                    log(f"[{dep}] Deleted superseded branch {head}.")
+                    if res.returncode == 0:
+                        log(f"[{dep}] Deleted superseded branch {head}.")
+                    else:
+                        log(
+                            f"Warning: could not delete superseded branch {head} ({res.stderr.strip()[:200]})."
+                        )
                 except Exception as e:
                     log(f"Warning: could not delete superseded branch {head} ({e}).")
 
