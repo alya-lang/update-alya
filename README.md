@@ -110,7 +110,36 @@ jobs:
 - 🚫 Empty-PR guard: a pull request opens only when `alya.toml`/`alya.lock` actually changed.
 - ⏭️ The package `version` and `alya-version` fields are never touched.
 - 🔀 Changes never go straight to the base branch: one stable branch per package (`<prefix>/<suffix>` or `<prefix>/<dep>-<ver>`) plus pull request (or working tree only with `create-pr: 'false'`). Repeat runs refresh the same PR instead of piling up duplicates, and a clean tree closes a stale PR.
-- 🧹 Stale PRs are closed with their branch deleted; for merged PRs, enable *Automatically delete head branches* in repository Settings.
+- 🧹 Stale PRs are closed with their branch deleted; already-closed or merged updater PR branches are pruned on subsequent runs via GitHub API.
+
+### 🧹 Instant Branch Cleanup on PR Merge / Close
+
+By default, GitHub does not trigger the updater when you click *Merge pull request* or *Close pull request* in the web UI. To have branches deleted **immediately** whenever a dependency PR is merged or closed, add this lightweight workflow to your repository (`.github/workflows/cleanup-deps.yml`):
+
+```yaml
+name: Cleanup Dependency Branches
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    if: startsWith(github.head_ref, 'alya-deps/')
+    steps:
+      - name: Delete branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          gh api --method DELETE "repos/${{ github.repository }}/git/refs/heads/${BRANCH}" || true
+```
+
+Additionally, enable **Automatically delete head branches** in repository *Settings → General → Pull Requests* to let GitHub natively prune merged branches.
 
 Requires `contents: write` and `pull-requests: write` permissions when `create-pr` is enabled. Opened PRs carry the configured labels, requested reviewers, and per-dependency `🚀 What's Changed` commit lists (`* subject by user (sha)` — plain names, no `@`-mentions, so upstream authors are not pinged; tag bumps fall back to the upstream release body only when the old ref cannot be compared).
 
