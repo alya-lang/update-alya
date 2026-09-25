@@ -505,7 +505,27 @@ def close_scope_stales(repo, prefix, scope, active_deps, gh_env):
             except Exception as e:
                 log(f"Warning: could not delete branch {head} ({e}).")
         except Exception as e:
-            log(f"Warning: could not close PR #{num} ({e}).")
+                log(f"Warning: could not close PR #{num} ({e}).")
+    # Backstop: delete branches of already-closed updater PRs (merged or
+    # manually closed elsewhere), so nothing lingers even without the
+    # template cleanup workflow.
+    try:
+        r = run(["gh", "pr", "list", "--state", "closed", "--limit", "100",
+                 "--json", "number,headRefName",
+                 "--jq", ".[].number, .[].headRefName"], cwd=str(repo), env=gh_env)
+    except Exception:
+        return closed
+    if r.returncode != 0:
+        return closed
+    tokens = (r.stdout or "").split()
+    for num, head in zip(tokens[0::2], tokens[1::2]):
+        if not head.startswith(head_prefix):
+            continue
+        try:
+            run(["git", "push", "origin", "--delete", head], cwd=str(repo), check=True)
+            log(f"Deleted branch {head} of closed PR #{num}.")
+        except Exception:
+            pass
     return closed
 
 
