@@ -147,8 +147,10 @@ def changes_lines(owner, repo, base, head, token="", max_commits=30, limit=3000)
             msg = (c.get("commit", {}).get("message") or "").strip().splitlines()
             if not msg:
                 continue
+            # Plain username, no @mention: keeps attribution without pinging
+            # upstream authors on every automated PR.
             login = ((c.get("author") or {}).get("login") or "").strip()
-            author = f"@{login}" if login else ((c.get("commit", {}).get("author", {}).get("name") or "").strip() or "unknown")
+            author = login if login else ((c.get("commit", {}).get("author", {}).get("name") or "").strip() or "unknown")
             lines.append(f"* {msg[0][:120]} by {author} ({(c.get('sha') or '')[:7]})")
         text = "\n".join(lines)
         if len(text) > limit:
