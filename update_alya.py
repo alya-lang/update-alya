@@ -959,6 +959,7 @@ def close_superseded_prs(repo, prefix, scope, dep, current_pr_num, gh_env):
     except Exception:
         return
 
+    slug = repo_slug(repo)
     for item in open_prs:
         num = str(item.get("number") or "")
         head = item.get("headRefName") or ""
@@ -991,6 +992,25 @@ def close_superseded_prs(repo, prefix, scope, dep, current_pr_num, gh_env):
                 )
             except Exception as e:
                 log(f"Warning: could not close superseded PR #{num} ({e}).")
+
+            # GitHub Actions recursion guard prevents GITHUB_TOKEN actions from triggering
+            # cleanup workflows. Delete the superseded branch directly via the GitHub API.
+            if slug:
+                try:
+                    run(
+                        [
+                            "gh",
+                            "api",
+                            "--method",
+                            "DELETE",
+                            f"repos/{slug}/git/refs/heads/{head}",
+                        ],
+                        cwd=str(repo),
+                        env=gh_env,
+                    )
+                    log(f"[{dep}] Deleted superseded branch {head}.")
+                except Exception as e:
+                    log(f"Warning: could not delete superseded branch {head} ({e}).")
 
 
 def write_outputs(updated, summary):
