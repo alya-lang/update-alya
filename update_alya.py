@@ -201,9 +201,10 @@ def lock_branch_bumps(pkg_dir):
         old_rev = old.get(url)
         if not old_rev or old_rev == new_rev:
             continue
-        mo = re.match(r"https://github\.com/([^/]+)/([^/]+?)(?:\.git)?$", url)
+        base_url = url.split("?", 1)[0]
+        mo = re.match(r"https://github\.com/([^/]+)/([^/]+?)(?:\.git)?$", base_url)
         owner, repo = (mo.group(1), mo.group(2)) if mo else ("", "")
-        name = url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+        name = base_url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
         entries.append({
             "name": name, "kind": "branch", "owner": owner, "repo": repo,
             "branch": "", "current": old_rev, "latest": new_rev,
