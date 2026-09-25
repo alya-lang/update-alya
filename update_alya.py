@@ -32,7 +32,6 @@ import shutil
 import subprocess
 import sys
 import urllib.request
-from datetime import datetime, timezone
 from pathlib import Path
 
 # Keep the step summary far below GitHub's 1 MB cap.
@@ -416,20 +415,33 @@ def main():
     write_outputs(updated=bool(bumps), summary=summary)
     write_summary(pkg_dir.name, summary)
 
-    # Never push straight to the base branch: PR (or working tree only).
+    # Never push straight to the base branch: update (or close) one stable
+    # PR per slug, or leave the working tree untouched with create-pr=false.
+    # The stable branch name lets repeat runs refresh the same PR instead of
+    # piling up duplicates; a clean tree closes a stale PR (Dependabot-style).
+    slug = os.environ.get("INPUT_BRANCH_SUFFIX", "").strip().strip("/") or pkg_dir.name
+    branch = f"{prefix}/{slug}"
+    labels = [l.strip() for l in os.environ.get("INPUT_LABELS", "dependencies").split(",") if l.strip()]
+    reviewers = [r.strip() for r in os.environ.get("INPUT_REVIEWERS", "").split(",") if r.strip()]
+    gh_env = {"GH_TOKEN": token, "GITHUB_TOKEN": token} if token else None
+    existing_pr = open_pr_for_branch(pkg_dir, branch, gh_env) if create_pr else None
+
     if not bumps or not create_pr:
         if not bumps:
-            log("Everything up to date.")
+            if existing_pr:
+                try:
+                    run(["gh", "pr", "close", str(existing_pr), "--comment",
+                         "Alya dependencies are up to date; closing."],
+                        cwd=str(pkg_dir), env=gh_env, check=True)
+                    log(f"Closed stale pull request #{existing_pr}.")
+                except Exception as e:
+                    log(f"Warning: could not close PR #{existing_pr} ({e}).")
+            else:
+                log("Everything up to date.")
         else:
             log("create-pr=false: changes left in the working tree.")
         return
 
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    suffix = os.environ.get("INPUT_BRANCH_SUFFIX", "").strip().strip("/")
-    branch = f"{prefix}/{suffix}-{stamp}" if suffix else f"{prefix}/{stamp}"
-    labels = [l.strip() for l in os.environ.get("INPUT_LABELS", "dependencies").split(",") if l.strip()]
-    reviewers = [r.strip() for r in os.environ.get("INPUT_REVIEWERS", "").split(",") if r.strip()]
-    gh_env = {"GH_TOKEN": token, "GITHUB_TOKEN": token} if token else None
     try:
         ensure_labels(pkg_dir, labels, gh_env)
         notes_sections = []
@@ -439,7 +451,9 @@ def main():
                 section = f"#### {b['name']} (lock): {short_rev(b['current'])} -> {short_rev(b['latest'])}"
                 notes_sections.append(section + (f"\n\n```text\n{commits}\n```" if commits else ""))
             elif b.get("kind") == "lock-new":
-                notes_sections.append(f"#### {b['name']} (new lock): {short_rev(b['latest'])}")
+                ctx = recent_commits(b["owner"], b["repo"], b["latest"], token) if b.get("owner") else ""
+                section = f"#### {b['name']} (new lock): {short_rev(b['latest'])}"
+                notes_sections.append(section + (f"\n\n```text\n{ctx}\n```" if ctx else ""))
             else:
                 notes = release_notes(b["owner"], b["repo"], b["latest"], token)
                 if notes:
@@ -481,21 +495,60 @@ def main():
                     cwd=str(pkg_dir),
                     check=True,
                 )
-        run(["git", "push", "-u", "origin", branch], cwd=str(pkg_dir), check=True)
+        run(["git", "push", "-f", "origin", branch], cwd=str(pkg_dir), check=True)
         pr_body = "Automated Alya dependency bumps by [update-alya](https://github.com/alya-lang/update-alya).\n\n" + "\n".join(body_lines)
         if notes_sections:
             pr_body += "\n\n### Release notes\n\n" + "\n\n".join(notes_sections)
-        pr_cmd = ["gh", "pr", "create", "--base", base, "--head", branch,
-                  "--title", "chore(deps): bump alya dependencies", "--body", pr_body]
-        for label in labels:
-            pr_cmd += ["--label", label]
-        for reviewer in reviewers:
-            pr_cmd += ["--reviewer", reviewer]
-        pr = run(pr_cmd, cwd=str(pkg_dir), env=gh_env, check=True)
-        log(f"Opened pull request: {pr.stdout.strip()[:200]}")
+        if existing_pr:
+            edit_cmd = ["gh", "pr", "edit", str(existing_pr), "--body", pr_body]
+            for label in labels:
+                edit_cmd += ["--add-label", label]
+            for reviewer in reviewers:
+                edit_cmd += ["--add-reviewer", reviewer]
+            run(edit_cmd, cwd=str(pkg_dir), env=gh_env, check=True)
+            log(f"Updated pull request #{existing_pr}.")
+        else:
+            pr_cmd = ["gh", "pr", "create", "--base", base, "--head", branch,
+                      "--title", "chore(deps): bump alya dependencies", "--body", pr_body]
+            for label in labels:
+                pr_cmd += ["--label", label]
+            for reviewer in reviewers:
+                pr_cmd += ["--reviewer", reviewer]
+            pr = run(pr_cmd, cwd=str(pkg_dir), env=gh_env, check=True)
+            log(f"Opened pull request: {pr.stdout.strip()[:200]}")
     except Exception as e:
         log_error(f"Could not open pull request: {e}")
         sys.exit(1)
+
+
+def open_pr_for_branch(pkg_dir, branch, env):
+    """Returns the open PR number for `branch`, or None."""
+    try:
+        r = run(["gh", "pr", "list", "--head", branch, "--state", "open",
+                 "--json", "number", "--jq", ".[0].number"], cwd=str(pkg_dir), env=env)
+        if r.returncode == 0 and (r.stdout or "").strip().isdigit():
+            return int((r.stdout or "").strip())
+    except Exception:
+        pass
+    return None
+
+
+def recent_commits(owner, repo, rev, token="", max_commits=10, limit=1500):
+    """Lists recent commits ending at `rev` (context for lock-new entries)."""
+    try:
+        data = api_get(f"https://api.github.com/repos/{owner}/{repo}/commits?sha={rev}&per_page={max_commits}", token)
+        lines = []
+        items = data if isinstance(data, list) else []
+        for c in items[:max_commits]:
+            msg = (c.get("commit", {}).get("message") or "").strip().splitlines()
+            if msg:
+                lines.append(f"{(c.get('sha') or '')[:7]} {msg[0][:100]}")
+        text = "\n".join(lines)
+        if len(text) > limit:
+            text = text[:limit].rstrip() + "\n…(truncated)"
+        return text
+    except Exception:
+        return ""
 
 
 def write_outputs(updated, summary):

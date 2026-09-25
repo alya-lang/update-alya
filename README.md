@@ -85,7 +85,7 @@ jobs:
 | `dry-run` | Report outdated pins without changing any files | No | `'false'` |
 | `base` | Base branch for the pull request | No | `'main'` |
 | `branch-prefix` | Prefix for the generated update branch | No | `'alya-deps'` |
-| `branch-suffix` | Optional suffix in the branch name (separates parallel matrix jobs) | No | `''` |
+| `branch-suffix` | Slug in the stable branch name (`<prefix>/<suffix>`, defaults to package dir); separates parallel matrix jobs | No | `''` |
 | `labels` | Comma-separated labels attached to the PR (created if missing) | No | `'dependencies'` |
 | `reviewers` | Comma-separated GitHub usernames to request review from | No | `''` |
 | `token` | GitHub token for API requests and pull request creation | No | `${{ github.token }}` |
@@ -109,7 +109,7 @@ jobs:
 - 🔀 Branch pins: manifest keeps `branch = "…"`, the lock rev is refreshed via the compiler path; PRs list the commits between revs (no release changelog exists for branches). Without a compiler, lock drift is reported read-only.
 - 🚫 Empty-PR guard: a pull request opens only when `alya.toml`/`alya.lock` actually changed.
 - ⏭️ The package `version` and `alya-version` fields are never touched.
-- 🔀 Changes never go straight to the base branch: a timestamped `alya-deps/…` branch plus pull request (or working tree only with `create-pr: 'false'`).
+- 🔀 Changes never go straight to the base branch: one stable branch per package (`<prefix>/<suffix>`) plus pull request (or working tree only with `create-pr: 'false'`). Repeat runs refresh the same PR instead of piling up duplicates, and a clean tree closes a stale PR.
 
 Requires `contents: write` and `pull-requests: write` permissions when `create-pr` is enabled. Opened PRs carry the configured labels, requested reviewers, and the upstream release notes of each bumped dependency.
 
