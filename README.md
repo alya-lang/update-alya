@@ -73,7 +73,12 @@ jobs:
 - ⏭️ The package `version` and `alya-version` fields are never touched.
 - 🔀 Changes never go straight to the base branch: a timestamped `alya-deps/…` branch plus pull request (or working tree only with `create-pr: 'false'`).
 
-Requires `contents: write` and `pull-requests: write` permissions when `create-pr` is enabled. The repository must also allow GitHub Actions to create pull requests (Settings → Actions → General → Workflow permissions → check *Allow GitHub Actions to create and approve pull requests*; if your organization locks this policy, pass a PAT with `contents` + `pull-requests` access via the `token` input instead — it is used for push, labels, and PR creation alike). Opened PRs carry the configured labels, requested reviewers, and the upstream release notes of each bumped dependency.
+Requires `contents: write` and `pull-requests: write` permissions when `create-pr` is enabled. Opened PRs carry the configured labels, requested reviewers, and the upstream release notes of each bumped dependency.
+
+## 🔑 Authentication (two supported paths)
+
+1. **Default token (simplest):** allow GitHub Actions to create pull requests — repository *Settings → Actions → General → Workflow permissions*, or once per organization. Nothing extra to configure; omit `token`.
+2. **PAT:** if your organization locks that policy, create a token with `contents` + `pull-requests` access, store it as a secret (e.g. `UPDATE_ALYA_TOKEN`), and pass `token: ${{ secrets.UPDATE_ALYA_TOKEN }}`. It is used for push, labels, and PR creation alike.
 
 ---
 
