@@ -467,6 +467,19 @@ def main():
             else:
                 body_lines.append(f"- {b['name']}: {b['current']} -> {b['latest']}")
         run(["git", "commit", "-m", "chore(deps): bump alya dependencies"], cwd=str(pkg_dir), check=True)
+        # Push with the caller token when provided: GITHUB_TOKEN honors the
+        # repo/org workflow-permissions policy (which may forbid pushes/PRs),
+        # while a PAT passed via `token` bypasses it.
+        if token:
+            remote = run(["git", "remote", "get-url", "origin"], cwd=str(pkg_dir))
+            m = re.match(r"https://github\.com/([^/]+)/([^/]+?)(?:\.git)?$", (remote.stdout or "").strip())
+            if m:
+                run(
+                    ["git", "remote", "set-url", "origin",
+                     f"https://x-access-token:{token}@github.com/{m.group(1)}/{m.group(2)}.git"],
+                    cwd=str(pkg_dir),
+                    check=True,
+                )
         run(["git", "push", "-u", "origin", branch], cwd=str(pkg_dir), check=True)
         pr_body = "Automated Alya dependency bumps by [update-alya](https://github.com/alya-lang/update-alya).\n\n" + "\n".join(body_lines)
         if notes_sections:
