@@ -178,11 +178,13 @@ def short_rev(rev):
     return rev[:7]
 
 
-def lock_branch_bumps(pkg_dir):
+def lock_branch_bumps(pkg_dir, skip_names=()):
     """Detects lock-only rev moves (branch pins) from `git diff` on alya.lock.
 
     Used after `alya update -u`: the manifest keeps `branch = "main"` while
     the lock advances to a new commit. Returns bump entries with kind=branch.
+    Lock moves belonging to tag-bumped deps (`skip_names`) are excluded so
+    each manifest+lock pair stays atomic inside its version PR.
     """
     r = run(["git", "diff", "-U0", "--", "alya.lock"], cwd=str(pkg_dir))
     if r.returncode != 0:
@@ -204,6 +206,8 @@ def lock_branch_bumps(pkg_dir):
         mo = re.match(r"https://github\.com/([^/]+)/([^/]+?)(?:\.git)?$", base_url)
         owner, repo = (mo.group(1), mo.group(2)) if mo else ("", "")
         name = base_url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+        if name in skip_names:
+            continue
         entries.append({
             "name": name, "kind": "branch", "owner": owner, "repo": repo,
             "branch": "", "current": old_rev, "latest": new_rev,
@@ -308,7 +312,7 @@ def compiler_bump(pkg_dir, token, dry_run):
         new_tag = after.get(name, (None, None, old_tag))[2]
         if new_tag != old_tag:
             bumps.append({"name": name, "kind": "tag", "owner": owner, "repo": repo, "current": old_tag, "latest": new_tag})
-    for e in lock_branch_bumps(pkg_dir):
+    for e in lock_branch_bumps(pkg_dir, set(before)):
         if not any(b["name"] == e["name"] for b in bumps):
             bumps.append(e)
     if not bumps:
@@ -513,10 +517,13 @@ def main():
         log("create-pr=false: changes left in the working tree." if bumps else "Everything up to date.")
         return
 
-    # Group by upstream dependency: one PR per dep across all manifests.
+    # Group by (upstream dependency, change class): version bumps and lock
+    # refreshes get separate PRs (Renovate-style lockFileMaintenance split),
+    # so mechanical lock updates can merge under a different policy.
     groups = {}
     for b in bumps:
-        groups.setdefault(b["name"], []).append(b)
+        cls = "version" if b.get("kind") == "tag" else "lock"
+        groups.setdefault((b["name"], cls), []).append(b)
 
     try:
         ensure_labels(repo, labels, gh_env)
@@ -530,20 +537,22 @@ def main():
                     cwd=str(repo),
                     check=True,
                 )
-        for dep, entries in groups.items():
-            bump_dep(repo, dep, entries, base, prefix, scope, labels, reviewers, gh_env, token)
-        close_scope_stales(repo, prefix, scope, set(groups), gh_env)
+        for (dep, cls), entries in groups.items():
+            bump_dep(repo, dep, cls, entries, base, prefix, scope, labels, reviewers, gh_env, token)
+        close_scope_stales(repo, prefix, scope, {dep for dep, _ in groups}, gh_env)
         if not groups:
             log("Everything up to date.")
     except Exception as e:
         log_error(f"Could not process pull requests: {e}")
         sys.exit(1)
 
-def bump_dep(repo, dep, entries, base, prefix, scope, labels, reviewers, gh_env, token):
+def bump_dep(repo, dep, cls, entries, base, prefix, scope, labels, reviewers, gh_env, token):
     """Stages, commits, pushes and opens/refreshes one dependency PR."""
     tag_entries = [e for e in entries if e.get("kind") == "tag"]
     if tag_entries:
         ver = tag_entries[0]["latest"]
+    elif cls == "lock":
+        ver = "lock"
     else:
         ver = short_rev(entries[0]["latest"])
     branch = dep_branch(prefix, scope, dep, ver)

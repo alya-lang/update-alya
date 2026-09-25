@@ -3,7 +3,7 @@
 [![CI](https://github.com/alya-lang/update-alya/actions/workflows/test.yml/badge.svg)](https://github.com/alya-lang/update-alya/actions/workflows/test.yml)
 [![License](https://img.shields.io/github/license/alya-lang/update-alya?color=blue&label=License)](LICENSE)
 
-Dependabot-style updater for [Alya](https://github.com/alya-lang/alya) package dependencies. Scans every `alya.toml` under `package-dir`, groups outdated `git` pins by upstream package (one PR per dependency, e.g. `chore(deps): bump rand from v0.0.0 to v0.1.0`), refreshes locks, and opens pull requests.
+Dependabot-style updater for [Alya](https://github.com/alya-lang/alya) package dependencies. Scans every `alya.toml` under `package-dir`, groups outdated `git` pins by upstream package (one PR per dependency, e.g. `chore(deps): bump rand from v0.0.0 to v0.1.0`), refreshes locks, and opens pull requests. Version bumps and lock refreshes get separate PRs (Renovate-style), so mechanical lock updates can merge under a different policy.
 
 ---
 
