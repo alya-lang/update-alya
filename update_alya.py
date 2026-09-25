@@ -350,13 +350,19 @@ def compiler_bump(pkg_dir, token, dry_run):
         # cover it with informational entries instead of reporting up-to-date.
         st = run(["git", "status", "--porcelain", "--", "alya.toml", "alya.lock"], cwd=str(pkg_dir))
         if "alya.lock" in (st.stdout or ""):
+            branch_pins = {}
+            try:
+                for bname, (_, _, bbranch) in read_branch_pins(pkg_dir / "alya.toml").items():
+                    branch_pins[bname] = bbranch
+            except Exception:
+                pass
             for name, (url, rev) in read_lock_sources(pkg_dir).items():
                 base_url = url.split("?", 1)[0]
                 mo = re.match(r"https://github\.com/([^/]+)/([^/]+?)(?:\.git)?$", base_url)
                 owner, repo = (mo.group(1), mo.group(2)) if mo else ("", "")
                 bumps.append({
                     "name": name, "kind": "lock-new", "owner": owner, "repo": repo,
-                    "branch": "", "current": "(absent)", "latest": rev,
+                    "branch": branch_pins.get(name, ""), "current": "(absent)", "latest": rev,
                 })
     return bumps, skipped, output
 
@@ -482,16 +488,24 @@ def close_scope_stales(repo, prefix, scope, active_deps, gh_env):
     for num, head in zip(numbers, heads):
         if not head.startswith(head_prefix) or not num.isdigit():
             continue
-        dep = head[len(head_prefix):].rsplit("-", 1)[0]
-        if dep not in active_deps:
+        rest = head[len(head_prefix):]
+        dep = next((d for d in sorted(active_deps, key=len, reverse=True)
+                    if rest == d or rest.startswith(d + "-")), None)
+        if dep is None or dep in active_deps:
+            continue
+        try:
+            run(["gh", "pr", "close", num, "--comment",
+                 "Alya dependencies are up to date; closing."],
+                cwd=str(repo), env=gh_env, check=True)
+            log(f"Closed stale pull request #{num} ({head}).")
+            closed.append(num)
             try:
-                run(["gh", "pr", "close", num, "--comment",
-                     "Alya dependencies are up to date; closing."],
-                    cwd=str(repo), env=gh_env, check=True)
-                log(f"Closed stale pull request #{num} ({head}).")
-                closed.append(num)
+                run(["git", "push", "origin", "--delete", head], cwd=str(repo), check=True)
+                log(f"Deleted branch {head}.")
             except Exception as e:
-                log(f"Warning: could not close PR #{num} ({e}).")
+                log(f"Warning: could not delete branch {head} ({e}).")
+        except Exception as e:
+            log(f"Warning: could not close PR #{num} ({e}).")
     return closed
 
 
@@ -617,10 +631,9 @@ def bump_dep(repo, dep, cls, entries, base, prefix, scope, labels, reviewers, gh
     tag_entries = [e for e in entries if e.get("kind") == "tag"]
     if tag_entries:
         ver = tag_entries[0]["latest"]
-    elif cls == "lock":
-        ver = "lock"
     else:
-        ver = short_rev(entries[0]["latest"])
+        first = entries[0]
+        ver = first.get("branch") or short_rev(first["latest"])
     branch = dep_branch(prefix, scope, dep, ver)
     existing_pr = open_pr_for_branch(repo, branch, gh_env)
 
