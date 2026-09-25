@@ -125,12 +125,14 @@ def branch_head_sha(owner, repo, branch, token=""):
         return None
 
 
-def changes_lines(owner, repo, base, head, token="", max_commits=30, limit=3000):
-    """`* subject by @user (sha)` lines between two revs (release-notes style).
+def changes_lines(owner, repo, base, head, token="", max_commits=50, limit=8000, more_link=""):
+    """`* subject by user (sha)` lines between two revs (release-notes style).
 
     Mirrors the `What's Changed` section that `generate_release_notes.py`
     produces for package releases. With `base=None`, lists recent commits
-    ending at `head` (lock-new context). Returns "" when not retrievable.
+    ending at `head` (lock-new context). At most `max_commits` entries;
+    overflow links out via `more_link` instead of pasting everything.
+    Returns "" when not retrievable.
     """
     try:
         if base:
@@ -156,7 +158,12 @@ def changes_lines(owner, repo, base, head, token="", max_commits=30, limit=3000)
         if len(text) > limit:
             text = text[:limit].rstrip() + "\n…(truncated)"
         if total > len(lines):
-            text += f"\n…({total - len(lines)} more)"
+            extra = f"\n…({total - len(lines)} more)"
+            if more_link:
+                extra += f" — [see more]({more_link})"
+            text += extra
+        elif not base and len(lines) >= max_commits and more_link:
+            text += f"\n[See more history]({more_link})"
         return text
     except Exception:
         return ""
@@ -594,7 +601,9 @@ def bump_dep(repo, dep, cls, entries, base, prefix, scope, labels, reviewers, gh
             if key in seen_notes:
                 continue
             seen_notes.add(key)
-            commits = changes_lines(b["owner"], b["repo"], b["current"], b["latest"], token)
+            commits = changes_lines(
+                b["owner"], b["repo"], b["current"], b["latest"], token,
+                more_link=f"https://github.com/{b['owner']}/{b['repo']}/compare/{b['current']}...{b['latest']}")
             if commits:
                 notes_sections.append(
                     f"#### {b['name']} (lock): {short_rev(b['current'])} -> {short_rev(b['latest'])}"
@@ -604,7 +613,11 @@ def bump_dep(repo, dep, cls, entries, base, prefix, scope, labels, reviewers, gh
             if key in seen_notes:
                 continue
             seen_notes.add(key)
-            commits = changes_lines(b["owner"], b["repo"], None, b["latest"], token) if b.get("owner") else ""
+            commits = ""
+            if b.get("owner"):
+                commits = changes_lines(
+                    b["owner"], b["repo"], None, b["latest"], token,
+                    more_link=f"https://github.com/{b['owner']}/{b['repo']}/commits/{b['latest']}")
             if commits:
                 notes_sections.append(
                     f"#### {b['name']} (new lock): {short_rev(b['latest'])}"
@@ -614,11 +627,15 @@ def bump_dep(repo, dep, cls, entries, base, prefix, scope, labels, reviewers, gh
             if key in seen_notes:
                 continue
             seen_notes.add(key)
-            commits = changes_lines(b["owner"], b["repo"], b["current"], b["latest"], token)
+            commits = changes_lines(
+                b["owner"], b["repo"], b["current"], b["latest"], token,
+                more_link=f"https://github.com/{b['owner']}/{b['repo']}/releases/tag/{b['latest']}")
             if not commits:
                 # Old ref not comparable: show what's in the new release
                 # instead of dumping the raw release body.
-                commits = changes_lines(b["owner"], b["repo"], None, b["latest"], token)
+                commits = changes_lines(
+                    b["owner"], b["repo"], None, b["latest"], token,
+                    more_link=f"https://github.com/{b['owner']}/{b['repo']}/releases/tag/{b['latest']}")
             if not commits:
                 commits = release_notes(b["owner"], b["repo"], b["latest"], token)
             if commits:
