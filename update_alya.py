@@ -215,6 +215,12 @@ def lock_branch_bumps(pkg_dir, skip_names=()):
             continue
         (old if raw[0] == "-" else new)[m.group(1)] = m.group(2)
     entries = []
+    branch_pins = {}
+    try:
+        for bname, (_, _, bbranch) in read_branch_pins(pkg_dir / "alya.toml").items():
+            branch_pins[bname] = bbranch
+    except Exception:
+        pass
     for url, new_rev in new.items():
         old_rev = old.get(url)
         if not old_rev or old_rev == new_rev:
@@ -227,7 +233,7 @@ def lock_branch_bumps(pkg_dir, skip_names=()):
             continue
         entries.append({
             "name": name, "kind": "branch", "owner": owner, "repo": repo,
-            "branch": "", "current": old_rev, "latest": new_rev,
+            "branch": branch_pins.get(name, ""), "current": old_rev, "latest": new_rev,
         })
     return entries
 
@@ -422,9 +428,10 @@ def dep_title(dep, entries):
         return f"chore(deps): bump {dep} from {old_display} to {new}"
     for e in entries:
         if e.get("kind") == "branch":
-            return f"chore(deps): bump {dep} lock {short_rev(e['current'])} -> {short_rev(e['latest'])}"
+            where = f" ({e['branch']})" if e.get("branch") else ""
+            return f"chore(deps): refresh {dep} lockfile{where} to {short_rev(e['latest'])}"
     e = entries[0]
-    return f"chore(deps): lock {dep} {short_rev(e['latest'])}"
+    return f"chore(deps): add {dep} lockfile ({short_rev(e['latest'])})"
 
 
 def entry_line(repo, e):
