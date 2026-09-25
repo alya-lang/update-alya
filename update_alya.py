@@ -429,9 +429,9 @@ def dep_title(dep, entries):
     for e in entries:
         if e.get("kind") == "branch":
             where = f" ({e['branch']})" if e.get("branch") else ""
-            return f"chore(deps): refresh {dep} lockfile{where} to {short_rev(e['latest'])}"
+            return f"chore(deps): bump {dep}{where}"
     e = entries[0]
-    return f"chore(deps): add {dep} lockfile ({short_rev(e['latest'])})"
+    return f"chore(deps): bump {dep}"
 
 
 def entry_line(repo, e):
