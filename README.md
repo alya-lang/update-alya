@@ -128,7 +128,9 @@ permissions:
 jobs:
   cleanup:
     runs-on: ubuntu-latest
-    if: startsWith(github.head_ref, 'alya-deps/')
+    if: |
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.head_ref, 'alya-deps/')
     steps:
       - name: Delete branch
         env:

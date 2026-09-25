@@ -39,7 +39,11 @@ jobs:
   cleanup:
     name: Delete PR branch
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' && github.event.action == 'closed' && (startsWith(github.head_ref, 'alya-deps/') || startsWith(github.head_ref, 'e2e-test/'))
+    if: |
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (startsWith(github.head_ref, 'alya-deps/') || startsWith(github.head_ref, 'e2e-test/'))
     steps:
       - name: Delete merged or closed branch
         env:
