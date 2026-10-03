@@ -20,6 +20,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Unit tests (offline)
+        run: python3 -m unittest discover -s test -v
+
       - name: Run updater in dry-run mode
         id: update
         uses: ./

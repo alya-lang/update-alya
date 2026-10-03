@@ -195,9 +195,9 @@ def changes_lines(
         return ""
 
 
-def read_lock_sources(manifest_dir):
+def read_lock_sources(manifest_dir, lock_dir=None):
     """Returns {dep_name: (git_url, rev)} from alya.lock [[package]] blocks."""
-    lock = Path(manifest_dir) / "alya.lock"
+    lock = Path(lock_dir or manifest_dir) / "alya.lock"
     found = {}
     if not lock.is_file():
         return found
@@ -228,15 +228,18 @@ def short_rev(rev):
     return rev[:7]
 
 
-def lock_branch_bumps(pkg_dir, skip_names=()):
+def lock_branch_bumps(pkg_dir, skip_names=(), lock_dir=None, branch_pins=None):
     """Detects lock-only rev moves (branch pins) from `git diff` on alya.lock.
 
     Used after `alya update -u`: the manifest keeps `branch = "main"` while
     the lock advances to a new commit. Returns bump entries with kind=branch.
     Lock moves belonging to tag-bumped deps (`skip_names`) are excluded so
     each manifest+lock pair stays atomic inside its version PR.
+    `lock_dir` locates alya.lock (the workspace root in workspace mode);
+    `branch_pins` maps dep -> branch for the label (member manifests supply
+    it in workspace mode, else the unit manifest is read).
     """
-    r = run(["git", "diff", "-U0", "--", "alya.lock"], cwd=str(pkg_dir))
+    r = run(["git", "diff", "-U0", "--", "alya.lock"], cwd=str(lock_dir or pkg_dir))
     if r.returncode != 0:
         return []
     old, new = {}, {}
@@ -248,12 +251,13 @@ def lock_branch_bumps(pkg_dir, skip_names=()):
             continue
         (old if raw[0] == "-" else new)[m.group(1)] = m.group(2)
     entries = []
-    branch_pins = {}
-    try:
-        for bname, (_, _, bbranch) in read_branch_pins(pkg_dir / "alya.toml").items():
-            branch_pins[bname] = bbranch
-    except Exception:
-        pass
+    if branch_pins is None:
+        branch_pins = {}
+        try:
+            for bname, (_, _, bbranch) in read_branch_pins(pkg_dir / "alya.toml").items():
+                branch_pins[bname] = bbranch
+        except Exception:
+            pass
     for url, new_rev in new.items():
         old_rev = old.get(url)
         if not old_rev or old_rev == new_rev:
@@ -278,13 +282,13 @@ def lock_branch_bumps(pkg_dir, skip_names=()):
     return entries
 
 
-def branch_drift_notes(pkg_dir, token):
+def branch_drift_notes(pkg_dir, token, lock_dir=None):
     """Reports branch pins whose lock lags behind branch HEAD (read-only)."""
     notes = []
     branch_pins = read_branch_pins(pkg_dir / "alya.toml")
     if not branch_pins:
         return notes
-    locked = read_lock_sources(pkg_dir)
+    locked = read_lock_sources(pkg_dir, lock_dir)
     for name, (owner, repo, branch) in branch_pins.items():
         head = branch_head_sha(owner, repo, branch, token)
         if head is None:
@@ -362,17 +366,41 @@ def run(cmd, cwd=None, env=None, check=False):
     return res
 
 
-def compiler_bump(pkg_dir, token, dry_run):
+def read_unit_pins(manifest_files):
+    """{(manifest_path, dep): (owner, repo, tag)} across unit manifests."""
+    pins = {}
+    for mf in manifest_files:
+        for name, triple in read_pins(mf).items():
+            pins[(str(mf), name)] = triple
+    return pins
+
+
+def read_unit_branch_pins(manifest_files):
+    """{dep: (manifest_dir, owner, repo, branch)} across unit manifests."""
+    pins = {}
+    for mf in manifest_files:
+        for name, (_, _, branch) in read_branch_pins(mf).items():
+            pins[name] = (str(Path(mf).parent), branch)
+    return pins
+
+
+def compiler_bump(pkg_dir, token, dry_run, manifest_files=None, lock_dir=None, wsroot=None):
     """Compares pins against the API (dry run) or runs `alya update -u`.
 
-    Dry runs never invoke the compiler: `alya update -u` always writes, so
-    detection uses the same API comparison as the fallback and the real run
-    is left to refresh alya.lock. Returns (bumps, skipped, compiler_output).
+    A unit is one standalone package (manifest_files=[dir/alya.toml]) or a
+    whole workspace (member manifests, work at the root, lock at the root).
+    `wsroot` (None for standalone) is stamped on every bump so PR staging
+    picks up the shared root lock alongside member manifests. Dry runs never
+    invoke the compiler: `alya update -u` always writes, so detection uses
+    the same API comparison as the fallback and the real run is left to
+    refresh alya.lock. Returns (bumps, skipped, compiler_output).
     """
-    before = read_pins(pkg_dir / "alya.toml")
+    manifest_files = manifest_files or [pkg_dir / "alya.toml"]
+    lock_dir = lock_dir or pkg_dir
+    before = read_unit_pins(manifest_files)
     if dry_run:
         bumps, skipped = [], []
-        for name, (owner, repo, current) in before.items():
+        for (mf, name), (owner, repo, current) in before.items():
             latest = latest_release_tag(owner, repo, token)
             if latest is None:
                 skipped.append(f"{name}: no published release in {owner}/{repo}")
@@ -387,19 +415,22 @@ def compiler_bump(pkg_dir, token, dry_run):
                         "repo": repo,
                         "current": current,
                         "latest": latest,
+                        "dir": str(Path(mf).parent),
+                        "wsroot": wsroot,
                     }
                 )
-        for note in branch_drift_notes(pkg_dir, token):
-            skipped.append(note)
+        for mdir, branch_pins in _unit_branch_notes(manifest_files, lock_dir, token):
+            for note in branch_pins:
+                skipped.append(f"{mdir}: {note}")
         return bumps, skipped, ""
     res = run(["alya", "update", "-u"], cwd=str(pkg_dir))
     output = (res.stdout or "") + (res.stderr or "")
     if res.returncode != 0:
         raise RuntimeError(f"alya update -u failed:\n{output[:2000]}")
-    after = read_pins(pkg_dir / "alya.toml")
+    after = read_unit_pins(manifest_files)
     bumps, skipped = [], []
-    for name, (owner, repo, old_tag) in before.items():
-        new_tag = after.get(name, (None, None, old_tag))[2]
+    for (mf, name), (owner, repo, old_tag) in before.items():
+        new_tag = after.get((mf, name), (None, None, old_tag))[2]
         if new_tag != old_tag:
             bumps.append(
                 {
@@ -409,9 +440,18 @@ def compiler_bump(pkg_dir, token, dry_run):
                     "repo": repo,
                     "current": old_tag,
                     "latest": new_tag,
+                    "dir": str(Path(mf).parent),
+                    "wsroot": wsroot,
                 }
             )
-    for e in lock_branch_bumps(pkg_dir, set(before)):
+    for e in lock_branch_bumps(
+        pkg_dir,
+        {n for (_, n) in before},
+        lock_dir,
+        {n: b for n, (_, b) in read_unit_branch_pins(manifest_files).items()},
+    ):
+        e["dir"] = str(lock_dir)
+        e["wsroot"] = wsroot
         if not any(b["name"] == e["name"] for b in bumps):
             bumps.append(e)
     if not bumps:
@@ -419,18 +459,10 @@ def compiler_bump(pkg_dir, token, dry_run):
         # cover it with informational entries instead of reporting up-to-date.
         st = run(
             ["git", "status", "--porcelain", "--", "alya.toml", "alya.lock"],
-            cwd=str(pkg_dir),
+            cwd=str(lock_dir),
         )
         if "alya.lock" in (st.stdout or ""):
-            branch_pins = {}
-            try:
-                for bname, (_, _, bbranch) in read_branch_pins(
-                    pkg_dir / "alya.toml"
-                ).items():
-                    branch_pins[bname] = bbranch
-            except Exception:
-                pass
-            for name, (url, rev) in read_lock_sources(pkg_dir).items():
+            for name, (url, rev) in read_lock_sources(pkg_dir, lock_dir).items():
                 base_url = url.split("?", 1)[0]
                 mo = re.match(
                     r"https://github\.com/([^/]+)/([^/]+?)(?:\.git)?$", base_url
@@ -442,16 +474,57 @@ def compiler_bump(pkg_dir, token, dry_run):
                         "kind": "lock-new",
                         "owner": owner,
                         "repo": repo,
-                        "branch": branch_pins.get(name, ""),
+                        "branch": "",
                         "current": "(absent)",
                         "latest": rev,
+                        "dir": str(lock_dir),
+                        "wsroot": wsroot,
                     }
                 )
     return bumps, skipped, output
 
 
+def _unit_branch_notes(manifest_files, lock_dir, token):
+    """Yields (member_dirname, notes) for branch drift across unit manifests."""
+    locked = read_lock_sources(lock_dir)
+    out = []
+    for mf in manifest_files:
+        notes = []
+        for name, (owner, repo, branch) in read_branch_pins(mf).items():
+            head = branch_head_sha(owner, repo, branch, token)
+            if head is None:
+                notes.append(
+                    f"{name}: could not resolve branch {branch!r} in {owner}/{repo}"
+                )
+                continue
+            pinned = locked.get(name)
+            if pinned is None:
+                notes.append(f"{name}: branch {branch!r} not locked yet (HEAD {head[:7]})")
+            elif pinned[1] != head:
+                notes.append(
+                    f"{name}: lock behind branch {branch!r} ({short_rev(pinned[1])} -> {head[:7]})"
+                )
+        out.append((Path(mf).parent.name, notes))
+    return out
+
+
 def fallback_bump(pkg_dir, token, manifest):
-    """Bumps git+tag pins via the API. Returns (bumps, skipped, new_text|None)."""
+    """Bumps git+tag pins via the API. Returns (bumps, skipped, new_text|None).
+
+    Workspace members are skipped outright: their lock lives at the
+    workspace root, so manifest-only bumps here would leave a stale shared
+    lock. Rerun with a compiler on PATH instead.
+    """
+    ws_root = find_workspace_root(pkg_dir)
+    if ws_root is not None and Path(pkg_dir).resolve() != ws_root:
+        return (
+            [],
+            [
+                f"workspace member (lock at {ws_root}): manifest-only bump refused, "
+                "needs `alya` on PATH"
+            ],
+            None,
+        )
     text = manifest.read_text(encoding="utf-8")
     lines = text.splitlines(keepends=True)
     checked, bumps, skipped = 0, [], []
@@ -509,6 +582,72 @@ def git_toplevel(start):
     except Exception:
         pass
     return start
+
+
+WS_SECTION_RE = re.compile(r"^\[workspace\]\s*$", re.MULTILINE)
+
+
+def manifest_declares_workspace(manifest_path):
+    """True when alya.toml contains a `[workspace]` section."""
+    try:
+        text = Path(manifest_path).read_text(encoding="utf-8")
+    except Exception:
+        return False
+    return WS_SECTION_RE.search(text) is not None
+
+
+def find_workspace_root(start):
+    """Nearest ancestor-or-self dir whose alya.toml declares `[workspace]`."""
+    cur = Path(start).resolve()
+    while True:
+        manifest = cur / "alya.toml"
+        if manifest.is_file() and manifest_declares_workspace(manifest):
+            return cur
+        parent = cur.parent
+        if parent == cur:
+            return None
+        cur = parent
+
+
+def expand_workspace_members(root):
+    """Expands `[workspace] members` minus `exclude` (glob, relative to root).
+
+    Returns sorted member dirs. Missing manifests and nested workspaces are
+    hard errors (fail fast like the compiler).
+    """
+    members_re = re.compile(r"^\s*members\s*=\s*\[(.*?)\]\s*$", re.MULTILINE | re.DOTALL)
+    exclude_re = re.compile(r"^\s*exclude\s*=\s*\[(.*?)\]\s*$", re.MULTILINE | re.DOTALL)
+    try:
+        text = (Path(root) / "alya.toml").read_text(encoding="utf-8")
+    except Exception as e:
+        raise RuntimeError(f"cannot read workspace manifest in {root}: {e}")
+    mm = members_re.search(text)
+    if not mm:
+        raise RuntimeError(f"[workspace] in {root} declares no members")
+    quoted = re.compile(r'"([^"]+)"')
+    member_pats = quoted.findall(mm.group(1))
+    if not member_pats:
+        raise RuntimeError(f"[workspace] in {root} declares no members")
+    em = exclude_re.search(text)
+    exclude_pats = quoted.findall(em.group(1)) if em else []
+    included = set()
+    for pat in member_pats:
+        hits = sorted(p for p in Path(root).glob(pat) if p.is_dir())
+        if not hits:
+            raise RuntimeError(f"workspace pattern {pat!r} in {root} matched no directories")
+        included.update(hits)
+    for pat in exclude_pats:
+        for hit in Path(root).glob(pat):
+            included.discard(hit)
+    if not included:
+        raise RuntimeError(f"workspace in {root} resolves to no members")
+    members = sorted(included)
+    for m in members:
+        if not (m / "alya.toml").is_file():
+            raise RuntimeError(f"workspace member {m} has no alya.toml")
+        if manifest_declares_workspace(m / "alya.toml"):
+            raise RuntimeError(f"nested workspace at {m}: members must not declare [workspace]")
+    return members
 
 
 def collect_manifests(root):
@@ -628,29 +767,84 @@ def main():
         sys.exit(1)
     repo = git_toplevel(scan_root)
     has_compiler = bool(shutil.which("alya"))
+
+    # Group manifests into units: standalone packages stay alone, while
+    # every manifest inside a workspace (root + members) collapses into one
+    # workspace unit processed once at the root.
+    units = []
+    seen_units = set()
+    for mdir in manifests:
+        ws_root = find_workspace_root(mdir)
+        if ws_root is None:
+            key = ("pkg", mdir)
+            if key in seen_units:
+                continue
+            seen_units.add(key)
+            units.append(
+                {
+                    "work_dir": mdir,
+                    "manifest_files": [mdir / "alya.toml"],
+                    "lock_dir": mdir,
+                    "wsroot": None,
+                    "label": mdir.name,
+                }
+            )
+        else:
+            key = ("ws", ws_root)
+            if key in seen_units:
+                continue
+            seen_units.add(key)
+            members = expand_workspace_members(ws_root)
+            units.append(
+                {
+                    "work_dir": ws_root,
+                    "manifest_files": [m / "alya.toml" for m in members],
+                    "lock_dir": ws_root,
+                    "wsroot": str(ws_root),
+                    "label": f"{ws_root.name} (workspace, {len(members)} members)",
+                }
+            )
     log(
-        f"Scanning {len(manifests)} manifest(s) under {scan_root} "
+        f"Scanning {len(manifests)} manifest(s) in {len(units)} unit(s) under {scan_root} "
         f"({'compiler' if has_compiler else 'manifest-only fallback'})."
     )
 
     bumps, skipped = [], []
-    for mdir in manifests:
-        manifest = mdir / "alya.toml"
+    for unit in units:
+        mdir = unit["work_dir"]
+        manifest = mdir / "alya.toml" if unit["wsroot"] is None else None
         try:
             if has_compiler:
-                b, s, _ = compiler_bump(mdir, token, dry_run)
+                b, s, _ = compiler_bump(
+                    mdir,
+                    token,
+                    dry_run,
+                    unit["manifest_files"],
+                    unit["lock_dir"],
+                    unit["wsroot"],
+                )
             else:
-                b, s, new_text = fallback_bump(mdir, token, manifest)
-                if not dry_run and new_text is not None:
-                    manifest.write_text(new_text, encoding="utf-8")
-                    log(f"Updated {manifest}")
+                if unit["wsroot"] is not None:
+                    # No per-member fallback (stale shared lock); the root
+                    # manifest itself carries no pins, so note and move on.
+                    s = [
+                        f"workspace {unit['label']}: manifest-only mode cannot "
+                        "refresh the shared lock, needs `alya` on PATH"
+                    ]
+                    b, new_text = [], None
+                else:
+                    b, s, new_text = fallback_bump(mdir, token, manifest)
+                    if not dry_run and new_text is not None:
+                        manifest.write_text(new_text, encoding="utf-8")
+                        log(f"Updated {manifest}")
         except Exception as e:
             log_error(f"{mdir}: {e}")
             sys.exit(1)
         for e in b:
-            e["dir"] = str(mdir)
+            e.setdefault("wsroot", unit["wsroot"])
+            e.setdefault("dir", str(mdir))
         bumps.extend(b)
-        skipped.extend(f"{mdir.name}: {s}" for s in s)
+        skipped.extend(f"{unit['label']}: {s}" for s in s)
 
     for b in bumps:
         log(f"{b['name']}: {short_rev(b['current'])} -> {short_rev(b['latest'])}")
@@ -775,7 +969,11 @@ def bump_dep(
     files = set()
     for e in entries:
         files.add(str(Path(e["dir"]) / "alya.toml"))
-        files.add(str(Path(e["dir"]) / "alya.lock"))
+        if e.get("wsroot"):
+            # Shared root lock covers every member manifest in the PR.
+            files.add(str(Path(e["wsroot"]) / "alya.lock"))
+        else:
+            files.add(str(Path(e["dir"]) / "alya.lock"))
     notes_sections = []
     seen_notes = set()
     for b in entries:
